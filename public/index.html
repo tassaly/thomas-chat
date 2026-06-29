@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thomas — IronHub Sales Agent</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:           #F5F4F0;
+    --surface:      #FFFFFF;
+    --border:       #E2DED6;
+    --text:         #1C1B19;
+    --muted:        #8C8880;
+    --accent:       #FFC107;
+    --accent-hover: #E6AD00;
+    --accent-dim:   #FFE082;
+    --thomas-bg:    #FFFFFF;
+    --thomas-border:#E2DED6;
+    --buyer-bg:     #FFC107;
+    --buyer-text:   #1C1B19;
+    --input-bg:     #F5F4F0;
+    --radius:       14px;
+    --radius-sm:    8px;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    padding: 22px 20px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ih-logo {
+    display: block;
+    height: 28px;
+    width: auto;
+    margin-bottom: 14px;
+  }
+
+  .agent-name {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .agent-role {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    background: #3A9160;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .sidebar-section {
+    padding: 20px;
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .sidebar-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .scenario-textarea {
+    width: 100%;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 12px;
+    resize: vertical;
+    min-height: 160px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .scenario-textarea::placeholder { color: var(--muted); }
+  .scenario-textarea:focus { border-color: var(--accent); }
+
+  .scenario-hint {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .reset-btn {
+    margin: 0 20px 20px;
+    padding: 10px 16px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    text-align: center;
+  }
+
+  .reset-btn:hover { border-color: var(--text); color: var(--text); }
+
+  /* ── Main chat ── */
+  .main {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .chat-header {
+    padding: 0 24px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .chat-header-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .chat-header-sub   { font-size: 12px; color: var(--muted); }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 24px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    scroll-behavior: smooth;
+  }
+
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-track { background: transparent; }
+  .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .message { display: flex; flex-direction: column; max-width: 72%; gap: 4px; }
+  .message.thomas { align-self: flex-start; }
+  .message.buyer  { align-self: flex-end; }
+
+  .msg-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 4px;
+  }
+
+  .message.buyer .msg-label { text-align: right; color: #9A7400; }
+
+  .msg-bubble {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+  }
+
+  .message.thomas .msg-bubble {
+    background: var(--thomas-bg);
+    border: 1px solid var(--thomas-border);
+    border-bottom-left-radius: 4px;
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+
+  .message.buyer .msg-bubble {
+    background: var(--buyer-bg);
+    border-bottom-right-radius: 4px;
+    color: var(--buyer-text);
+    font-weight: 500;
+  }
+
+  /* Typing indicator */
+  .typing {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 14px 16px;
+    background: var(--thomas-bg);
+    border: 1px solid var(--thomas-border);
+    border-radius: var(--radius);
+    border-bottom-left-radius: 4px;
+    width: fit-content;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+
+  .typing span {
+    display: block;
+    width: 6px; height: 6px;
+    background: var(--muted);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite ease-in-out;
+  }
+
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+    30% { transform: translateY(-5px); opacity: 1; }
+  }
+
+  /* Empty state */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--muted);
+    text-align: center;
+    padding: 40px;
+  }
+
+  .empty-icon {
+    width: 52px; height: 52px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+
+  .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .empty-state p  { font-size: 13px; max-width: 280px; line-height: 1.6; }
+
+  /* Input area */
+  .input-area {
+    border-top: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .input-wrap {
+    flex: 1;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    transition: border-color 0.15s;
+  }
+
+  .input-wrap:focus-within { border-color: var(--accent); }
+
+  #message-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.5;
+    resize: none;
+    max-height: 120px;
+    overflow-y: auto;
+    display: block;
+  }
+
+  #message-input::placeholder { color: var(--muted); }
+
+  .send-btn {
+    width: 38px; height: 38px;
+    background: var(--accent);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s;
+  }
+
+  .send-btn:hover  { background: var(--accent-hover); }
+  .send-btn:active { transform: scale(0.93); }
+  .send-btn:disabled { background: var(--accent-dim); cursor: default; }
+
+  .send-btn svg { display: block; }
+
+  @media (max-width: 680px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <img
+        class="ih-logo"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAARwAAAA4CAYAAAAvvkd0AAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAyZpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuNi1jMDY3IDc5LjE1Nzc0NywgMjAxNS8wMy8zMC0yMzo0MDo0MiAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RSZWY9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZVJlZiMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIENDIDIwMTUgKFdpbmRvd3MpIiB4bXBNTTpJbnN0YW5jZUlEPSJ4bXAuaWlkOkQ3NTYyMTk1NkM2MzExRTVCQkFBRTdGN0ZFMUM0NkJBIiB4bXBNTTpEb2N1bWVudElEPSJ4bXAuZGlkOkQ3NTYyMTk2NkM2MzExRTVCQkFBRTdGN0ZFMUM0NkJBIj4gPHhtcE1NOkRlcml2ZWRGcm9tIHN0UmVmOmluc3RhbmNlSUQ9InhtcC5paWQ6RDc1NjIxOTM2QzYzMTFFNUJCQUFFN0Y3RkUxQzQ2QkEiIHN0UmVmOmRvY3VtZW50SUQ9InhtcC5kaWQ6RDc1NjIxOTQ2QzYzMTFFNUJCQUFFN0Y3RkUxQzQ2QkEiLz4gPC9yZGY6RGVzY3JpcHRpb24+IDwvcmRmOlJERj4gPC94OnhtcG1ldGE+IDw/eHBhY2tldCBlbmQ9InIiPz5/oNLbAAAScklEQVR42uxd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"
+        alt="IronHub"
+      />
+      <div class="agent-name">Thomas</div>
+      <div class="agent-role"><span class="status-dot"></span>Equipment Specialist · Active</div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Scenario</div>
+      <textarea
+        id="scenario"
+        class="scenario-textarea"
+        placeholder="Describe the item and the buyer role you're testing.
+
+Example:
+Item: 1,850 HP White Superior MW72 Compressor (IH-25858), Cenovus client, price POA, located near Fort Saskatchewan, AB. Public documents: spec sheet and P&ID drawings.
+
+You are playing: Don Reed, Baytex Energy. You're interested in buying for inventory."
+      ></textarea>
+      <p class="scenario-hint">Set the scenario before your first message. Thomas will use this as his item context.</p>
+    </div>
+
+    <button class="reset-btn" onclick="resetChat()">↺ &nbsp;Start new conversation</button>
+  </aside>
+
+  <!-- Chat -->
+  <main class="main">
+    <div class="chat-header">
+      <span class="chat-header-title">Thomas</span>
+      <span class="chat-header-sub">— IronHub Sales Agent Role-Play</span>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">T</div>
+        <h3>Ready to role-play</h3>
+        <p>Set a scenario in the sidebar, then send your first message as the buyer.</p>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-wrap">
+        <textarea
+          id="message-input"
+          placeholder="Message as the buyer…"
+          rows="1"
+          onkeydown="handleKey(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+      </div>
+      <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Send">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M14 8L2 2l3 6-3 6 12-6z" fill="#1C1B19"/>
+        </svg>
+      </button>
+    </div>
+  </main>
+
+</div>
+
+<script>
+  const sessionId = Math.random().toString(36).slice(2);
+  let isTyping = false;
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function appendMessage(role, text) {
+    const container = document.getElementById('messages');
+    const emptyState = document.getElementById('empty-state');
+    if (emptyState) emptyState.remove();
+
+    const wrap = document.createElement('div');
+    wrap.className = `message ${role}`;
+
+    const label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = role === 'thomas' ? 'Thomas' : 'You (buyer)';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.textContent = text;
+
+    wrap.appendChild(label);
+    wrap.appendChild(bubble);
+    container.appendChild(wrap);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function showTyping() {
+    const container = document.getElementById('messages');
+    const wrap = document.createElement('div');
+    wrap.className = 'message thomas';
+    wrap.id = 'typing-indicator';
+
+    const label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = 'Thomas';
+
+    const indicator = document.createElement('div');
+    indicator.className = 'typing';
+    indicator.innerHTML = '<span></span><span></span><span></span>';
+
+    wrap.appendChild(label);
+    wrap.appendChild(indicator);
+    container.appendChild(wrap);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function hideTyping() {
+    const el = document.getElementById('typing-indicator');
+    if (el) el.remove();
+  }
+
+  async function sendMessage() {
+    if (isTyping) return;
+    const input = document.getElementById('message-input');
+    const text = input.value.trim();
+    if (!text) return;
+
+    const scenario = document.getElementById('scenario').value.trim();
+    input.value = '';
+    input.style.height = 'auto';
+
+    appendMessage('buyer', text);
+    isTyping = true;
+    document.getElementById('send-btn').disabled = true;
+    showTyping();
+
+    try {
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, sessionId, scenario }),
+      });
+
+      const data = await res.json();
+      hideTyping();
+      appendMessage('thomas', data.reply || 'Something went wrong — no response from Thomas.');
+    } catch (err) {
+      hideTyping();
+      appendMessage('thomas', 'Connection error. Make sure the server is running.');
+    } finally {
+      isTyping = false;
+      document.getElementById('send-btn').disabled = false;
+      input.focus();
+    }
+  }
+
+  async function resetChat() {
+    await fetch('/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+
+    const container = document.getElementById('messages');
+    container.innerHTML = `
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">T</div>
+        <h3>Ready to role-play</h3>
+        <p>Set a scenario in the sidebar, then send your first message as the buyer.</p>
+      </div>`;
+  }
+</script>
+</body>
+</html>
