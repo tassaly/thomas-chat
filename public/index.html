@@ -41,7 +41,6 @@
     overflow: hidden;
   }
 
-  /* ── Sidebar ── */
   .sidebar {
     background: var(--surface);
     border-right: 1px solid var(--border);
@@ -92,7 +91,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
 
   .sidebar-label {
@@ -103,26 +102,81 @@
     color: var(--muted);
   }
 
-  .scenario-textarea {
-    width: 100%;
+  .inquiry-input-wrap {
+    display: flex;
+    gap: 8px;
+  }
+
+  .inquiry-input {
+    flex: 1;
     background: var(--input-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text);
     font-family: inherit;
-    font-size: 13px;
-    line-height: 1.6;
-    padding: 12px;
-    resize: vertical;
-    min-height: 160px;
+    font-size: 14px;
+    padding: 9px 12px;
     outline: none;
     transition: border-color 0.15s;
+    min-width: 0;
   }
 
-  .scenario-textarea::placeholder { color: var(--muted); }
-  .scenario-textarea:focus { border-color: var(--accent); }
+  .inquiry-input::placeholder { color: var(--muted); }
+  .inquiry-input:focus { border-color: var(--accent); }
 
-  .scenario-hint {
+  .load-btn {
+    padding: 9px 14px;
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+
+  .load-btn:hover { background: var(--accent-hover); }
+  .load-btn:disabled { background: var(--accent-dim); cursor: default; }
+
+  .inquiry-card {
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .inquiry-card.visible { display: flex; }
+
+  .inquiry-card-row {
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.45;
+  }
+
+  .inquiry-card-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+
+  .inquiry-card-id {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  .sidebar-hint {
     font-size: 12px;
     color: var(--muted);
     line-height: 1.55;
@@ -144,7 +198,6 @@
 
   .reset-btn:hover { border-color: var(--text); color: var(--text); }
 
-  /* ── Main chat ── */
   .main {
     display: flex;
     flex-direction: column;
@@ -219,7 +272,6 @@
     font-weight: 500;
   }
 
-  /* Typing indicator */
   .typing {
     display: flex;
     align-items: center;
@@ -249,7 +301,6 @@
     30% { transform: translateY(-5px); opacity: 1; }
   }
 
-  /* Empty state */
   .empty-state {
     flex: 1;
     display: flex;
@@ -280,7 +331,6 @@
   .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); }
   .empty-state p  { font-size: 13px; max-width: 280px; line-height: 1.6; }
 
-  /* Input area */
   .input-area {
     border-top: 1px solid var(--border);
     padding: 14px 24px;
@@ -336,8 +386,6 @@
   .send-btn:active { transform: scale(0.93); }
   .send-btn:disabled { background: var(--accent-dim); cursor: default; }
 
-  .send-btn svg { display: block; }
-
   @media (max-width: 680px) {
     .layout { grid-template-columns: 1fr; }
     .sidebar { display: none; }
@@ -347,7 +395,6 @@
 <body>
 <div class="layout">
 
-  <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar-header">
       <img
@@ -360,35 +407,51 @@
     </div>
 
     <div class="sidebar-section">
-      <div class="sidebar-label">Scenario</div>
-      <textarea
-        id="scenario"
-        class="scenario-textarea"
-        placeholder="Describe the item and the buyer role you're testing.
+      <div class="sidebar-label">Inquiry ID</div>
+      <div class="inquiry-input-wrap">
+        <input
+          id="inquiry-id"
+          class="inquiry-input"
+          type="text"
+          placeholder="e.g. 6121"
+          onkeydown="if(event.key==='Enter') loadInquiry()"
+        />
+        <button class="load-btn" id="load-btn" onclick="loadInquiry()">Load</button>
+      </div>
 
-Example:
-Item: 1,850 HP White Superior MW72 Compressor (IH-25858), Cenovus client, price POA, located near Fort Saskatchewan, AB. Public documents: spec sheet and P&ID drawings.
+      <div class="inquiry-card" id="inquiry-card">
+        <div class="inquiry-card-id" id="card-inquiry-id"></div>
+        <div>
+          <div class="inquiry-card-label">Item</div>
+          <div class="inquiry-card-row" id="card-title"></div>
+        </div>
+        <div>
+          <div class="inquiry-card-label">Buyer</div>
+          <div class="inquiry-card-row" id="card-buyer"></div>
+        </div>
+        <div>
+          <div class="inquiry-card-label">Their message</div>
+          <div class="inquiry-card-row" id="card-message"></div>
+        </div>
+      </div>
 
-You are playing: Don Reed, Baytex Energy. You're interested in buying for inventory."
-      ></textarea>
-      <p class="scenario-hint">Set the scenario before your first message. Thomas will use this as his item context.</p>
+      <p class="sidebar-hint" id="sidebar-hint">Enter an inquiry ID and click Load — Thomas will pull the details automatically.</p>
     </div>
 
     <button class="reset-btn" onclick="resetChat()">↺ &nbsp;Start new conversation</button>
   </aside>
 
-  <!-- Chat -->
   <main class="main">
     <div class="chat-header">
       <span class="chat-header-title">Thomas</span>
-      <span class="chat-header-sub">— IronHub Sales Agent Role-Play</span>
+      <span class="chat-header-sub" id="chat-header-sub">— IronHub Sales Agent Role-Play</span>
     </div>
 
     <div class="messages" id="messages">
       <div class="empty-state" id="empty-state">
         <div class="empty-icon">T</div>
         <h3>Ready to role-play</h3>
-        <p>Set a scenario in the sidebar, then send your first message as the buyer.</p>
+        <p>Load an inquiry from the sidebar, then message Thomas as the buyer.</p>
       </div>
     </div>
 
@@ -415,6 +478,8 @@ You are playing: Don Reed, Baytex Energy. You're interested in buying for invent
 <script>
   const sessionId = Math.random().toString(36).slice(2);
   let isTyping = false;
+  let currentInquiryId = null;
+  let buyerLabel = 'You (buyer)';
 
   function autoResize(el) {
     el.style.height = 'auto';
@@ -428,6 +493,41 @@ You are playing: Don Reed, Baytex Energy. You're interested in buying for invent
     }
   }
 
+  async function loadInquiry() {
+    const id = document.getElementById('inquiry-id').value.trim();
+    if (!id) return;
+
+    const btn = document.getElementById('load-btn');
+    btn.disabled = true;
+    btn.textContent = '…';
+
+    try {
+      const res = await fetch(`/inquiry/${id}`);
+      const data = await res.json();
+
+      if (!data.ok) throw new Error(data.error);
+
+      const { inquiry } = data;
+      currentInquiryId = id;
+
+      document.getElementById('card-inquiry-id').textContent = inquiry.inquiry_id;
+      document.getElementById('card-title').textContent = inquiry.listing.title + ' — ' + inquiry.listing.client;
+      document.getElementById('card-buyer').textContent = inquiry.buyer.full_name + (inquiry.buyer.company ? ', ' + inquiry.buyer.company : '');
+      document.getElementById('card-message').textContent = '"' + inquiry.buyer.message + '"';
+      document.getElementById('inquiry-card').classList.add('visible');
+      document.getElementById('sidebar-hint').textContent = 'Loaded. Send the buyer\'s opening message to start.';
+
+      buyerLabel = inquiry.buyer.full_name || 'You (buyer)';
+      document.getElementById('chat-header-sub').textContent = `— ${inquiry.inquiry_id} · ${inquiry.listing.title}`;
+
+    } catch (err) {
+      document.getElementById('sidebar-hint').textContent = 'Could not load inquiry. Check the ID and try again.';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Load';
+    }
+  }
+
   function appendMessage(role, text) {
     const container = document.getElementById('messages');
     const emptyState = document.getElementById('empty-state');
@@ -438,7 +538,7 @@ You are playing: Don Reed, Baytex Energy. You're interested in buying for invent
 
     const label = document.createElement('div');
     label.className = 'msg-label';
-    label.textContent = role === 'thomas' ? 'Thomas' : 'You (buyer)';
+    label.textContent = role === 'thomas' ? 'Thomas' : buyerLabel;
 
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
@@ -481,7 +581,6 @@ You are playing: Don Reed, Baytex Energy. You're interested in buying for invent
     const text = input.value.trim();
     if (!text) return;
 
-    const scenario = document.getElementById('scenario').value.trim();
     input.value = '';
     input.style.height = 'auto';
 
@@ -494,11 +593,12 @@ You are playing: Don Reed, Baytex Energy. You're interested in buying for invent
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId, scenario }),
+        body: JSON.stringify({ message: text, sessionId, inquiryId: currentInquiryId }),
       });
 
       const data = await res.json();
       hideTyping();
+      if (data.buyerName) buyerLabel = data.buyerName;
       appendMessage('thomas', data.reply || 'Something went wrong — no response from Thomas.');
     } catch (err) {
       hideTyping();
@@ -517,12 +617,14 @@ You are playing: Don Reed, Baytex Energy. You're interested in buying for invent
       body: JSON.stringify({ sessionId }),
     });
 
-    const container = document.getElementById('messages');
-    container.innerHTML = `
+    currentInquiryId = null;
+    buyerLabel = 'You (buyer)';
+    document.getElementById('chat-header-sub').textContent = '— IronHub Sales Agent Role-Play';
+    document.getElementById('messages').innerHTML = `
       <div class="empty-state" id="empty-state">
         <div class="empty-icon">T</div>
         <h3>Ready to role-play</h3>
-        <p>Set a scenario in the sidebar, then send your first message as the buyer.</p>
+        <p>Load an inquiry from the sidebar, then message Thomas as the buyer.</p>
       </div>`;
   }
 </script>
