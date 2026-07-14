@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thomas — Draft Assist</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #F5F4F0;
+    --surface: #FFFFFF;
+    --border: #E2DED6;
+    --text: #1A1916;
+    --muted: #7A7570;
+    --accent: #FFC107;
+    --accent-hover: #E6AE00;
+    --accent-dim: #FFCF4D;
+    --sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  .header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo { height: 32px; }
+
+  .header-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .header-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 1px;
+  }
+
+  .header-nav {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .header-nav a {
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  .header-nav a:hover { color: var(--text); }
+
+  /* Main layout */
+  .main {
+    flex: 1;
+    max-width: 760px;
+    width: 100%;
+    margin: 40px auto;
+    padding: 0 24px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+  }
+
+  .card-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  /* Inquiry row */
+  .inquiry-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .inquiry-input {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .inquiry-input:focus { border-color: var(--accent); }
+
+  .load-btn {
+    background: var(--text);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+
+  .load-btn:hover { opacity: 0.85; }
+  .load-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* Inquiry card */
+  .inquiry-card {
+    display: none;
+    margin-top: 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .inquiry-card.visible { display: flex; }
+
+  .inquiry-detail { flex: 1; }
+
+  .inquiry-item {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .inquiry-buyer {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .inquiry-id-badge {
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--accent);
+    color: var(--text);
+    padding: 3px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  /* Message area */
+  .message-area {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    resize: vertical;
+    min-height: 120px;
+    outline: none;
+    line-height: 1.55;
+    transition: border-color 0.15s;
+  }
+
+  .message-area:focus { border-color: var(--accent); }
+
+  .generate-btn {
+    background: var(--accent);
+    color: var(--text);
+    border: none;
+    border-radius: 6px;
+    padding: 11px 24px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: 12px;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .generate-btn:hover { background: var(--accent-hover); }
+  .generate-btn:disabled { opacity: 0.5; cursor: default; }
+
+  /* Draft output */
+  .draft-card { display: none; }
+  .draft-card.visible { display: block; }
+
+  .draft-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .draft-to {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .copy-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .copy-btn:hover { border-color: var(--accent); }
+  .copy-btn.copied { background: #E8F5E9; border-color: #4CAF82; color: #2A6B3A; }
+
+  .draft-text {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }
+
+  /* Error */
+  .error-msg {
+    display: none;
+    font-size: 13px;
+    color: #C0392B;
+    background: #FDF0EE;
+    border: 1px solid #F5C6C0;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-top: 10px;
+  }
+
+  .error-msg.visible { display: block; }
+
+  /* Spinner */
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(0,0,0,0.2);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+
+  .spinner.visible { display: block; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <svg class="logo" viewBox="0 0 120 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="32" height="32" rx="4" fill="#FFC107"/>
+    <text x="5" y="23" font-family="Georgia, serif" font-size="20" font-weight="bold" fill="#1A1916">IH</text>
+    <text x="40" y="22" font-family="Segoe UI, system-ui, sans-serif" font-size="16" font-weight="700" fill="#1A1916">IronHub</text>
+  </svg>
+  <div>
+    <div class="header-title">Thomas — Draft Assist</div>
+    <div class="header-sub">Paste a buyer message. Get a ready-to-send reply.</div>
+  </div>
+  <div class="header-nav"><a href="/">Role-play mode →</a></div>
+</header>
+
+<main class="main">
+
+  <!-- Step 1: Load inquiry -->
+  <div class="card">
+    <div class="card-label">Step 1 — Load Inquiry</div>
+    <div class="inquiry-row">
+      <input class="inquiry-input" id="inquiryId" type="text" placeholder="Enter inquiry ID (e.g. 6121)" />
+      <button class="load-btn" id="loadBtn" onclick="loadInquiry()">Load</button>
+    </div>
+    <div class="error-msg" id="loadError"></div>
+    <div class="inquiry-card" id="inquiryCard">
+      <div class="inquiry-detail">
+        <div class="inquiry-item" id="cardItem"></div>
+        <div class="inquiry-buyer" id="cardBuyer"></div>
+      </div>
+      <div class="inquiry-id-badge" id="cardId"></div>
+    </div>
+  </div>
+
+  <!-- Step 2: Buyer message -->
+  <div class="card">
+    <div class="card-label">Step 2 — Paste Buyer Message</div>
+    <textarea class="message-area" id="buyerMessage" placeholder="Paste the buyer's message here…"></textarea>
+    <button class="generate-btn" id="generateBtn" onclick="generateDraft()" disabled>
+      <span class="spinner" id="spinner"></span>
+      <span id="generateLabel">Generate Draft</span>
+    </button>
+    <div class="error-msg" id="generateError"></div>
+  </div>
+
+  <!-- Step 3: Draft output -->
+  <div class="card draft-card" id="draftCard">
+    <div class="draft-header">
+      <div class="card-label" style="margin-bottom:0">Draft Reply</div>
+      <button class="copy-btn" id="copyBtn" onclick="copyDraft()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        Copy
+      </button>
+    </div>
+    <div class="draft-to" id="draftTo"></div>
+    <div class="draft-text" id="draftText" style="margin-top: 10px;"></div>
+  </div>
+
+</main>
+
+<script>
+  let loadedInquiry = null;
+
+  async function loadInquiry() {
+    const id = document.getElementById('inquiryId').value.trim();
+    if (!id) return;
+
+    const btn = document.getElementById('loadBtn');
+    const errorEl = document.getElementById('loadError');
+    const card = document.getElementById('inquiryCard');
+
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    errorEl.classList.remove('visible');
+    card.classList.remove('visible');
+
+    try {
+      const res = await fetch(`/inquiry/${id}`);
+      const data = await res.json();
+
+      if (!data.ok) throw new Error(data.error || 'Inquiry not found');
+
+      loadedInquiry = data.inquiry;
+      document.getElementById('cardItem').textContent = data.inquiry.listing.title;
+      document.getElementById('cardBuyer').textContent =
+        `${data.inquiry.buyer.full_name} · ${data.inquiry.buyer.company || data.inquiry.buyer.email}`;
+      document.getElementById('cardId').textContent = data.inquiry.inquiry_id;
+      card.classList.add('visible');
+      document.getElementById('generateBtn').disabled = false;
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.add('visible');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Load';
+    }
+  }
+
+  document.getElementById('inquiryId').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadInquiry();
+  });
+
+  async function generateDraft() {
+    const message = document.getElementById('buyerMessage').value.trim();
+    const id = document.getElementById('inquiryId').value.trim();
+    if (!message || !id) return;
+
+    const btn = document.getElementById('generateBtn');
+    const spinner = document.getElementById('spinner');
+    const label = document.getElementById('generateLabel');
+    const errorEl = document.getElementById('generateError');
+    const draftCard = document.getElementById('draftCard');
+
+    btn.disabled = true;
+    spinner.classList.add('visible');
+    label.textContent = 'Drafting…';
+    errorEl.classList.remove('visible');
+    draftCard.classList.remove('visible');
+
+    try {
+      const res = await fetch('/assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, inquiryId: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate draft');
+
+      document.getElementById('draftTo').textContent = `To: ${data.buyerName} · Re: ${data.itemTitle}`;
+      document.getElementById('draftText').textContent = data.draft;
+      document.getElementById('copyBtn').classList.remove('copied');
+      document.getElementById('copyBtn').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`;
+      draftCard.classList.add('visible');
+      draftCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.add('visible');
+    } finally {
+      btn.disabled = false;
+      spinner.classList.remove('visible');
+      label.textContent = 'Generate Draft';
+    }
+  }
+
+  function copyDraft() {
+    const text = document.getElementById('draftText').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('copyBtn');
+      btn.classList.add('copied');
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copied`;
+    });
+  }
+</script>
+</body>
+</html>

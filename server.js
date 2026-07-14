@@ -188,6 +188,45 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+app.post('/assist', async (req, res) => {
+  const { message, inquiryId } = req.body;
+
+  if (!message || !inquiryId) {
+    return res.status(400).json({ error: 'message and inquiryId are required' });
+  }
+
+  let inquiryContext = '';
+  let inquiryData = null;
+
+  try {
+    inquiryData = await fetchInquiry(inquiryId);
+    inquiryContext = buildInquiryContext(inquiryData);
+  } catch (err) {
+    return res.status(404).json({ error: `Could not load inquiry ${inquiryId}: ${err.message}` });
+  }
+
+  const assistPrompt = `${THOMAS_BASE_PROMPT}\n\n${inquiryContext}\n\nYou are drafting a single reply to the buyer message below on behalf of an IronHub staff member. Write the reply exactly as Thomas would send it — natural, warm, and following all conversation rules. Do not add any preamble such as "Here is a draft reply" — write only the reply itself, ready to send as-is.`;
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      system: assistPrompt,
+      messages: [{ role: 'user', content: message }],
+    });
+
+    const draft = response.content[0].text;
+    res.json({
+      draft,
+      buyerName: inquiryData.buyer.full_name,
+      itemTitle: inquiryData.listing.title,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate draft' });
+  }
+});
+
 app.post('/reset', (req, res) => {
   const { sessionId } = req.body;
   if (sessionId && sessions[sessionId]) {
