@@ -131,6 +131,10 @@ Only answer from the information above. Do not invent details about condition, s
 
 const sessions = {};
 
+app.get('/assist', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'assist.html'));
+});
+
 app.get('/inquiry/:id', async (req, res) => {
   try {
     const inquiry = await fetchInquiry(req.params.id);
