@@ -3,12 +3,17 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('https');
 const path = require('path');
+const multer = require('multer');
 
 const app = express();
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const IRONHUB_API_KEY = process.env.IRONHUB_API_KEY;
 const IRONHUB_API_URL = process.env.IRONHUB_API_URL || 'https://app.theironhub.com';
+const THOMAS_WEBHOOK_SECRET = process.env.THOMAS_WEBHOOK_SECRET;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+
+const upload = multer();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -132,6 +137,83 @@ Only answer from the information above. Do not invent details about condition, s
 
 const sessions = {};
 
+function stripQuotedEmail(text) {
+  if (!text) return '';
+  const markers = [
+    /^On .+wrote:/m,
+    /^From:/m,
+    /^-{3,}/m,
+    /^_{3,}/m,
+  ];
+  let result = text;
+  for (const marker of markers) {
+    const idx = result.search(marker);
+    if (idx > 20) result = result.substring(0, idx);
+  }
+  return result.trim();
+}
+
+async function generateThomasReply(sessionId, userMessage) {
+  const session = sessions[sessionId];
+  const systemPrompt = session.inquiryContext
+    ? `${THOMAS_BASE_PROMPT}\n\n${session.inquiryContext}`
+    : THOMAS_BASE_PROMPT;
+
+  session.messages.push({ role: 'user', content: userMessage });
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: session.messages,
+  });
+
+  const reply = response.content[0].text;
+  session.messages.push({ role: 'assistant', content: reply });
+  return reply;
+}
+
+async function sendEmail({ to, subject, body, replyTo }) {
+  if (!SENDGRID_API_KEY) {
+    console.log('[EMAIL - SendGrid not configured]');
+    console.log(`  To: ${to}`);
+    console.log(`  Subject: ${subject}`);
+    console.log(`  Reply-To: ${replyTo}`);
+    console.log(`  Body:\n${body}`);
+    return;
+  }
+
+  const payload = JSON.stringify({
+    personalizations: [{ to: [{ email: to }] }],
+    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub' },
+    reply_to: { email: replyTo },
+    subject,
+    content: [{ type: 'text/plain', value: body }],
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.sendgrid.com',
+      path: '/v3/mail/send',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SENDGRID_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      res.on('data', () => {});
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
+        else reject(new Error(`SendGrid returned ${res.statusCode}`));
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 app.get('/assist', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'assist.html'));
 });
@@ -238,6 +320,100 @@ app.post('/reset', (req, res) => {
     delete sessions[sessionId];
   }
   res.json({ ok: true });
+});
+
+// Called by Rails when Thomas is assigned to an inquiry
+app.post('/assign', async (req, res) => {
+  const secret = req.headers['x-webhook-secret'];
+  if (THOMAS_WEBHOOK_SECRET && secret !== THOMAS_WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { inquiry_id } = req.body;
+  if (!inquiry_id) return res.status(400).json({ error: 'inquiry_id is required' });
+
+  let inquiry;
+  try {
+    inquiry = await fetchInquiry(inquiry_id);
+  } catch (err) {
+    return res.status(404).json({ error: `Could not load inquiry ${inquiry_id}: ${err.message}` });
+  }
+
+  const sessionId = `inquiry-${inquiry_id}`;
+  sessions[sessionId] = {
+    messages: [],
+    inquiryContext: buildInquiryContext(inquiry),
+    buyerName: inquiry.buyer.full_name,
+    buyerEmail: inquiry.buyer.email,
+  };
+
+  try {
+    const reply = await generateThomasReply(sessionId, inquiry.buyer.message);
+    await sendEmail({
+      to: inquiry.buyer.email,
+      subject: `Re: ${inquiry.listing.title}`,
+      body: reply,
+      replyTo: `thomas+inquiry-${inquiry_id}@replies.theironhub.com`,
+    });
+    console.log(`[ASSIGN] Inquiry ${inquiry_id} — opening email sent to ${inquiry.buyer.email}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[ASSIGN] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Called by SendGrid inbound parse when buyer replies
+app.post('/inbound', upload.none(), async (req, res) => {
+  res.sendStatus(200); // Acknowledge SendGrid immediately
+
+  const to = req.body.to || '';
+  const text = req.body.text || '';
+
+  const match = to.match(/thomas\+inquiry-(\d+)@/);
+  if (!match) {
+    console.log('[INBOUND] Could not parse inquiry ID from:', to);
+    return;
+  }
+
+  const inquiryId = match[1];
+  const sessionId = `inquiry-${inquiryId}`;
+  const buyerMessage = stripQuotedEmail(text);
+
+  if (!buyerMessage) {
+    console.log(`[INBOUND] Empty message body for inquiry ${inquiryId} — skipping`);
+    return;
+  }
+
+  if (!sessions[sessionId]) {
+    try {
+      const inquiry = await fetchInquiry(inquiryId);
+      sessions[sessionId] = {
+        messages: [],
+        inquiryContext: buildInquiryContext(inquiry),
+        buyerName: inquiry.buyer.full_name,
+        buyerEmail: inquiry.buyer.email,
+      };
+    } catch (err) {
+      console.error(`[INBOUND] Could not restore session for inquiry ${inquiryId}:`, err.message);
+      return;
+    }
+  }
+
+  const session = sessions[sessionId];
+
+  try {
+    const reply = await generateThomasReply(sessionId, buyerMessage);
+    await sendEmail({
+      to: session.buyerEmail,
+      subject: `Re: ${req.body.subject || 'Your inquiry'}`,
+      body: reply,
+      replyTo: `thomas+inquiry-${inquiryId}@replies.theironhub.com`,
+    });
+    console.log(`[INBOUND] Inquiry ${inquiryId} — reply sent to ${session.buyerEmail}`);
+  } catch (err) {
+    console.error(`[INBOUND] Error for inquiry ${inquiryId}:`, err.message);
+  }
 });
 
 const PORT = process.env.PORT || 3000;
