@@ -202,10 +202,15 @@ async function sendEmail({ to, subject, body, replyTo }) {
         'Content-Length': Buffer.byteLength(payload),
       },
     }, (res) => {
-      res.on('data', () => {});
+      let responseBody = '';
+      res.on('data', chunk => responseBody += chunk);
       res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
-        else reject(new Error(`SendGrid returned ${res.statusCode}`));
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve();
+        } else {
+          console.error(`[EMAIL] SendGrid ${res.statusCode} response body:`, responseBody);
+          reject(new Error(`SendGrid returned ${res.statusCode}: ${responseBody}`));
+        }
       });
     });
     req.on('error', reject);
