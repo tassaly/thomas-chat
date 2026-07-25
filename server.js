@@ -175,12 +175,12 @@ async function generateThomasReply(sessionId, userMessage) {
 
 async function sendEmail({ to, subject, body, replyTo }) {
   if (!SENDGRID_API_KEY) {
-    console.log('[EMAIL - SendGrid not configured]');
-    console.log(`  To: ${to}`);
-    console.log(`  Subject: ${subject}`);
-    console.log(`  Reply-To: ${replyTo}`);
-    console.log(`  Body:\n${body}`);
-    return;
+    console.error('[EMAIL] SENDGRID_API_KEY is not set — cannot send email');
+    console.error(`  To: ${to}`);
+    console.error(`  Subject: ${subject}`);
+    console.error(`  Reply-To: ${replyTo}`);
+    console.error(`  Body:\n${body}`);
+    throw new Error('SENDGRID_API_KEY is not configured');
   }
 
   const payload = JSON.stringify({
@@ -202,10 +202,15 @@ async function sendEmail({ to, subject, body, replyTo }) {
         'Content-Length': Buffer.byteLength(payload),
       },
     }, (res) => {
-      res.on('data', () => {});
+      let responseBody = '';
+      res.on('data', chunk => responseBody += chunk);
       res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
-        else reject(new Error(`SendGrid returned ${res.statusCode}`));
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve();
+        } else {
+          console.error(`[EMAIL] SendGrid ${res.statusCode} response body:`, responseBody);
+          reject(new Error(`SendGrid returned ${res.statusCode}: ${responseBody}`));
+        }
       });
     });
     req.on('error', reject);
