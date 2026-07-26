@@ -384,6 +384,48 @@ async function maybeSendHandoff(sessionId, inquiry) {
   }
 }
 
+function postHandoffEmailText(inquiry, session, newMessage) {
+  const { buyer, listing } = inquiry;
+  const transcript = session.messages
+    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
+    .join('\n\n');
+
+  return `New message from ${buyer.full_name} on inquiry ${inquiry.public_id || inquiry.inquiry_id} (${listing.title}) — this inquiry was already handed off.
+
+New message:
+"${newMessage}"
+
+Full conversation so far:
+${transcript}`;
+}
+
+function postHandoffEmailHtml(inquiry, session, newMessage) {
+  const { buyer, listing } = inquiry;
+  const transcript = session.messages
+    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
+    .join('\n\n');
+
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
+    <p>New message from <strong>${escapeHtml(buyer.full_name)}</strong> on inquiry <strong>${escapeHtml(String(inquiry.public_id || inquiry.inquiry_id))}</strong> (${escapeHtml(listing.title)}) — this inquiry was already handed off.</p>
+    <blockquote style="border-left:3px solid #ccc;margin:0 0 16px;padding-left:12px;color:#333;">${bodyToHtml(newMessage)}</blockquote>
+    <p><strong>Full conversation so far:</strong></p>
+    ${bodyToHtml(transcript)}
+  </div>`;
+}
+
+async function forwardPostHandoffMessage(inquiry, session, newMessage) {
+  await sendViaSendGrid({
+    personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
+    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
+    reply_to: { email: inquiry.buyer.email },
+    subject: `Re: Handoff: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`,
+    content: [
+      { type: 'text/plain', value: postHandoffEmailText(inquiry, session, newMessage) },
+      { type: 'text/html', value: postHandoffEmailHtml(inquiry, session, newMessage) },
+    ],
+  });
+}
+
 app.get('/assist', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'assist.html'));
 });
@@ -420,6 +462,17 @@ app.post('/chat', async (req, res) => {
     } catch (err) {
       console.error('Failed to fetch inquiry:', err.message);
     }
+  }
+
+  if (session.handoffSent && session.inquiry) {
+    session.messages.push({ role: 'user', content: message });
+    try {
+      await forwardPostHandoffMessage(session.inquiry, session, message);
+      console.log(`[HANDOFF] Post-handoff message forwarded to ${HANDOFF_EMAIL} for inquiry ${session.inquiry.inquiry_id}`);
+    } catch (err) {
+      console.error('[HANDOFF] Failed to forward post-handoff message:', err.message);
+    }
+    return res.json({ reply: null, forwardedToHandoff: true, buyerName: session.buyerName || null });
   }
 
   const systemPrompt = session.inquiryContext
@@ -579,6 +632,17 @@ app.post('/inbound', upload.none(), async (req, res) => {
   }
 
   const session = sessions[sessionId];
+
+  if (session.handoffSent) {
+    session.messages.push({ role: 'user', content: buyerMessage });
+    try {
+      await forwardPostHandoffMessage(session.inquiry, session, buyerMessage);
+      console.log(`[HANDOFF] Post-handoff message forwarded to ${HANDOFF_EMAIL} for inquiry ${inquiryId}`);
+    } catch (err) {
+      console.error(`[HANDOFF] Failed to forward post-handoff message for inquiry ${inquiryId}:`, err.message);
+    }
+    return;
+  }
 
   try {
     const reply = await generateThomasReply(sessionId, buyerMessage);
