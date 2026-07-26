@@ -12,6 +12,19 @@ const IRONHUB_API_KEY = process.env.IRONHUB_API_KEY;
 const IRONHUB_API_URL = process.env.IRONHUB_API_URL || 'https://app.theironhub.com';
 const THOMAS_WEBHOOK_SECRET = process.env.THOMAS_WEBHOOK_SECRET;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const THOMAS_SERVER_URL = process.env.THOMAS_SERVER_URL || 'https://thomas-chat-production.up.railway.app';
+
+const SIGNATURE_TEXT = `Thomas | Sales Support
+T: (587) 783-8393 | Toll Free: 1-833-IRONHUB
+E: sales@theironhub.com | W: www.theironhub.com`;
+
+const SIGNATURE_HTML = `
+  <div style="margin-top:24px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#222;">
+    <div style="font-weight:bold;">Thomas | Sales Support</div>
+    <div>T: <a href="tel:+15877838393" style="color:#222;text-decoration:none;">(587) 783-8393</a> | Toll Free: <a href="tel:+18334766482" style="color:#222;text-decoration:none;">1-833-IRONHUB</a></div>
+    <div>E: <a href="mailto:sales@theironhub.com" style="color:#222;text-decoration:none;">sales@theironhub.com</a> | W: <a href="https://www.theironhub.com" style="color:#222;text-decoration:none;">www.theironhub.com</a></div>
+    <img src="${THOMAS_SERVER_URL}/logo.png" alt="IronHub" width="160" style="display:block;margin-top:12px;" />
+  </div>`;
 
 const upload = multer();
 
@@ -79,11 +92,9 @@ If a buyer stops responding:
 - No response after follow-up #2: Escalate to the IronHub operations team with a note that the buyer was non-responsive after two follow-up attempts. Do not continue contacting the buyer.
 
 SIGN-OFF FORMAT
-Keep emails signed:
+End every email with a brief sign-off only — do not add a title, phone number, or contact details, those are appended automatically:
 Best,
-Thomas
-Equipment Specialist — IronHub
-thomas@theironhub.com`;
+Thomas`;
 
 function fetchInquiry(inquiryId) {
   return new Promise((resolve, reject) => {
@@ -173,6 +184,17 @@ async function generateThomasReply(sessionId, userMessage) {
   return reply;
 }
 
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function bodyToHtml(text) {
+  return text
+    .split(/\n\s*\n/)
+    .map(para => `<p style="margin:0 0 12px;">${escapeHtml(para).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
 async function sendEmail({ to, subject, body, replyTo }) {
   if (!SENDGRID_API_KEY) {
     console.error('[EMAIL] SENDGRID_API_KEY is not set — cannot send email');
@@ -183,12 +205,18 @@ async function sendEmail({ to, subject, body, replyTo }) {
     throw new Error('SENDGRID_API_KEY is not configured');
   }
 
+  const textBody = `${body}\n\n${SIGNATURE_TEXT}`;
+  const htmlBody = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">${bodyToHtml(body)}${SIGNATURE_HTML}</div>`;
+
   const payload = JSON.stringify({
     personalizations: [{ to: [{ email: to }] }],
-    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub' },
+    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
     reply_to: { email: replyTo },
     subject,
-    content: [{ type: 'text/plain', value: body }],
+    content: [
+      { type: 'text/plain', value: textBody },
+      { type: 'text/html', value: htmlBody },
+    ],
   });
 
   return new Promise((resolve, reject) => {
