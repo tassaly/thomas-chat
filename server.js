@@ -26,6 +26,14 @@ const SIGNATURE_HTML = `
     <img src="${THOMAS_SERVER_URL}/logo.png" alt="IronHub" width="160" style="display:block;margin-top:12px;" />
   </div>`;
 
+const HANDOFF_EMAIL = 'sales@theironhub.com';
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+  'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com',
+  'protonmail.com', 'proton.me', 'gmx.com', 'yandex.com', 'zoho.com', 'mail.com',
+]);
+
 const upload = multer();
 
 app.use(express.json());
@@ -201,29 +209,12 @@ function bodyToHtml(text) {
     .join('');
 }
 
-async function sendEmail({ to, subject, body, replyTo }) {
+function sendViaSendGrid(payload) {
   if (!SENDGRID_API_KEY) {
-    console.error('[EMAIL] SENDGRID_API_KEY is not set — cannot send email');
-    console.error(`  To: ${to}`);
-    console.error(`  Subject: ${subject}`);
-    console.error(`  Reply-To: ${replyTo}`);
-    console.error(`  Body:\n${body}`);
     throw new Error('SENDGRID_API_KEY is not configured');
   }
 
-  const textBody = `${body}\n\n${SIGNATURE_TEXT}`;
-  const htmlBody = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">${bodyToHtml(body)}${SIGNATURE_HTML}</div>`;
-
-  const payload = JSON.stringify({
-    personalizations: [{ to: [{ email: to }] }],
-    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
-    reply_to: { email: replyTo },
-    subject,
-    content: [
-      { type: 'text/plain', value: textBody },
-      { type: 'text/html', value: htmlBody },
-    ],
-  });
+  const body = JSON.stringify(payload);
 
   return new Promise((resolve, reject) => {
     const req = https.request({
@@ -233,7 +224,7 @@ async function sendEmail({ to, subject, body, replyTo }) {
       headers: {
         'Authorization': `Bearer ${SENDGRID_API_KEY}`,
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
+        'Content-Length': Buffer.byteLength(body),
       },
     }, (res) => {
       let responseBody = '';
@@ -248,9 +239,142 @@ async function sendEmail({ to, subject, body, replyTo }) {
       });
     });
     req.on('error', reject);
-    req.write(payload);
+    req.write(body);
     req.end();
   });
+}
+
+async function sendEmail({ to, subject, body, replyTo }) {
+  const textBody = `${body}\n\n${SIGNATURE_TEXT}`;
+  const htmlBody = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">${bodyToHtml(body)}${SIGNATURE_HTML}</div>`;
+
+  try {
+    await sendViaSendGrid({
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
+      reply_to: { email: replyTo },
+      subject,
+      content: [
+        { type: 'text/plain', value: textBody },
+        { type: 'text/html', value: htmlBody },
+      ],
+    });
+  } catch (err) {
+    if (err.message === 'SENDGRID_API_KEY is not configured') {
+      console.error('[EMAIL] SENDGRID_API_KEY is not set — cannot send email');
+      console.error(`  To: ${to}`);
+      console.error(`  Subject: ${subject}`);
+      console.error(`  Reply-To: ${replyTo}`);
+      console.error(`  Body:\n${body}`);
+    }
+    throw err;
+  }
+}
+
+function emailDomain(email) {
+  return (email.split('@')[1] || '').toLowerCase();
+}
+
+async function analyzeForHandoff(session, inquiry) {
+  const transcript = session.messages
+    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
+    .join('\n\n');
+
+  const domain = emailDomain(inquiry.buyer.email);
+  const isFreeDomain = FREE_EMAIL_DOMAINS.has(domain);
+
+  const analysisPrompt = `You are reviewing a sales conversation between a buyer and Thomas, an AI sales assistant at IronHub, to prepare a handoff summary for a human IronHub team member who will take over.
+
+ITEM: ${inquiry.listing.title}
+BUYER: ${inquiry.buyer.full_name}${inquiry.buyer.company ? ` (${inquiry.buyer.company})` : ''}
+BUYER EMAIL DOMAIN: ${domain}
+
+CONVERSATION SO FAR:
+${transcript}
+
+Determine whether Thomas's most recent reply commits to a human IronHub team member following up with the buyer directly, for any reason — confirming a price, arranging an inspection, tracking down missing specs, or because the buyer explicitly asked for a human. If so, "handoff" is true.
+
+${isFreeDomain
+  ? `The buyer's email domain (${domain}) is a personal/consumer email provider, not a company domain. Set "companyBackground" to null — do not attempt to research a company.`
+  : `The buyer's email domain (${domain}) appears to be a company domain. If you have reasonably confident general knowledge of this company (industry, size, what they do), give a brief 1-2 sentence background. If you don't recognize the company or aren't confident, set "companyBackground" to null — never invent details.`}
+
+Assess interest level based on engagement, urgency, and how readily the buyer has shared qualifying info (timeline, location, etc.) — "high", "medium", or "low".
+
+Respond with ONLY valid JSON, no markdown code fences and no explanation text, matching exactly this shape:
+{"handoff": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 600,
+    system: analysisPrompt,
+    messages: [{ role: 'user', content: 'Analyze the conversation now.' }],
+  });
+
+  return JSON.parse(response.content[0].text.trim());
+}
+
+function handoffEmailText(inquiry, analysis) {
+  const { buyer, listing } = inquiry;
+  return `Inquiry: ${inquiry.public_id || inquiry.inquiry_id} — ${listing.title}
+Buyer: ${buyer.full_name}${buyer.company ? ` — ${buyer.company}` : ''}
+${buyer.email}${buyer.phone_number ? ` · ${buyer.phone_number}` : ''}
+
+Interest level: ${(analysis.interestLevel || 'unknown').toUpperCase()} — ${analysis.interestReasoning || ''}
+
+Company background: ${analysis.companyBackground || 'Not available — personal email domain or no reliable information.'}
+
+Summary:
+${analysis.summary || ''}`;
+}
+
+function handoffEmailHtml(inquiry, analysis) {
+  const { buyer, listing } = inquiry;
+  const interestColor = { high: '#1a7f37', medium: '#9a6700', low: '#57606a' }[analysis.interestLevel] || '#57606a';
+
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
+    <p><strong>Inquiry:</strong> ${escapeHtml(String(inquiry.public_id || inquiry.inquiry_id))} — ${escapeHtml(listing.title)}</p>
+    <p><strong>Buyer:</strong> ${escapeHtml(buyer.full_name)}${buyer.company ? ` — ${escapeHtml(buyer.company)}` : ''}<br>
+    ${escapeHtml(buyer.email)}${buyer.phone_number ? ` · ${escapeHtml(buyer.phone_number)}` : ''}</p>
+    <p><strong>Interest level:</strong> <span style="color:${interestColor};font-weight:bold;text-transform:uppercase;">${escapeHtml(analysis.interestLevel || 'unknown')}</span> — ${escapeHtml(analysis.interestReasoning || '')}</p>
+    <p><strong>Company background:</strong> ${analysis.companyBackground ? escapeHtml(analysis.companyBackground) : 'Not available — personal email domain or no reliable information.'}</p>
+    <p><strong>Summary:</strong><br>${bodyToHtml(analysis.summary || '')}</p>
+  </div>`;
+}
+
+async function sendHandoffEmail(inquiry, analysis) {
+  await sendViaSendGrid({
+    personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
+    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
+    subject: `Handoff: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`,
+    content: [
+      { type: 'text/plain', value: handoffEmailText(inquiry, analysis) },
+      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis) },
+    ],
+  });
+}
+
+async function maybeSendHandoff(sessionId, inquiry) {
+  const session = sessions[sessionId];
+  if (!session || !inquiry || session.handoffSent) return;
+
+  let analysis;
+  try {
+    analysis = await analyzeForHandoff(session, inquiry);
+  } catch (err) {
+    console.error('[HANDOFF] Analysis failed:', err.message);
+    return;
+  }
+
+  if (!analysis || !analysis.handoff) return;
+
+  session.handoffSent = true;
+
+  try {
+    await sendHandoffEmail(inquiry, analysis);
+    console.log(`[HANDOFF] Sent handoff summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
+  } catch (err) {
+    console.error('[HANDOFF] Failed to send handoff email:', err.message);
+  }
 }
 
 app.get('/assist', (req, res) => {
@@ -285,6 +409,7 @@ app.post('/chat', async (req, res) => {
       const inquiry = await fetchInquiry(inquiryId);
       session.inquiryContext = buildInquiryContext(inquiry);
       session.buyerName = inquiry.buyer.full_name;
+      session.inquiry = inquiry;
     } catch (err) {
       console.error('Failed to fetch inquiry:', err.message);
     }
@@ -306,6 +431,10 @@ app.post('/chat', async (req, res) => {
 
     const reply = response.content[0].text;
     session.messages.push({ role: 'assistant', content: reply });
+
+    if (session.inquiry) {
+      maybeSendHandoff(sessionId, session.inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
+    }
 
     res.json({ reply, buyerName: session.buyerName || null });
   } catch (err) {
@@ -384,6 +513,7 @@ app.post('/assign', async (req, res) => {
     inquiryContext: buildInquiryContext(inquiry),
     buyerName: inquiry.buyer.full_name,
     buyerEmail: inquiry.buyer.email,
+    inquiry,
   };
 
   try {
@@ -395,6 +525,7 @@ app.post('/assign', async (req, res) => {
       replyTo: `thomas+inquiry-${inquiry_id}@replies.theironhub.com`,
     });
     console.log(`[ASSIGN] Inquiry ${inquiry_id} — opening email sent to ${inquiry.buyer.email}`);
+    maybeSendHandoff(sessionId, inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
     res.json({ ok: true });
   } catch (err) {
     console.error('[ASSIGN] Error:', err.message);
@@ -432,6 +563,7 @@ app.post('/inbound', upload.none(), async (req, res) => {
         inquiryContext: buildInquiryContext(inquiry),
         buyerName: inquiry.buyer.full_name,
         buyerEmail: inquiry.buyer.email,
+        inquiry,
       };
     } catch (err) {
       console.error(`[INBOUND] Could not restore session for inquiry ${inquiryId}:`, err.message);
@@ -450,6 +582,7 @@ app.post('/inbound', upload.none(), async (req, res) => {
       replyTo: `thomas+inquiry-${inquiryId}@replies.theironhub.com`,
     });
     console.log(`[INBOUND] Inquiry ${inquiryId} — reply sent to ${session.buyerEmail}`);
+    maybeSendHandoff(sessionId, session.inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
   } catch (err) {
     console.error(`[INBOUND] Error for inquiry ${inquiryId}:`, err.message);
   }
