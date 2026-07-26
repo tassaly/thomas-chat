@@ -439,6 +439,29 @@ app.get('/inquiry/:id', async (req, res) => {
   }
 });
 
+// TEMPORARY — remove after verifying the signature/logo render correctly.
+app.get('/test-signature-email', async (req, res) => {
+  const secret = req.query.secret;
+  if (THOMAS_WEBHOOK_SECRET && secret !== THOMAS_WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const to = req.query.to;
+  if (!to) return res.status(400).json({ error: 'to query param is required' });
+
+  try {
+    await sendEmail({
+      to,
+      subject: 'Thomas signature test',
+      body: 'This is a test email to confirm the signature and logo render correctly.',
+      replyTo: 'thomas@theironhub.com',
+    });
+    res.json({ ok: true, sentTo: to });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/chat', async (req, res) => {
   const { message, sessionId, inquiryId } = req.body;
 
