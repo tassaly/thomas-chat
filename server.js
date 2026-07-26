@@ -277,9 +277,7 @@ function emailDomain(email) {
 }
 
 async function analyzeForHandoff(session, inquiry) {
-  const transcript = session.messages
-    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
-    .join('\n\n');
+  const transcript = conversationTranscript(session);
 
   const domain = emailDomain(inquiry.buyer.email);
   const isFreeDomain = FREE_EMAIL_DOMAINS.has(domain);
@@ -321,7 +319,13 @@ Once you're done with any research, respond with ONLY valid JSON as your final m
   return JSON.parse(text);
 }
 
-function handoffEmailText(inquiry, analysis) {
+function conversationTranscript(session) {
+  return session.messages
+    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
+    .join('\n\n');
+}
+
+function handoffEmailText(inquiry, analysis, session) {
   const { buyer, listing } = inquiry;
   return `Inquiry: ${inquiry.public_id || inquiry.inquiry_id} — ${listing.title}
 Buyer: ${buyer.full_name}${buyer.company ? ` — ${buyer.company}` : ''}
@@ -332,10 +336,13 @@ Interest level: ${(analysis.interestLevel || 'unknown').toUpperCase()} — ${ana
 Company background: ${analysis.companyBackground || 'Not available — personal email domain or no reliable information.'}
 
 Summary:
-${analysis.summary || ''}`;
+${analysis.summary || ''}
+
+Full conversation:
+${conversationTranscript(session)}`;
 }
 
-function handoffEmailHtml(inquiry, analysis) {
+function handoffEmailHtml(inquiry, analysis, session) {
   const { buyer, listing } = inquiry;
   const interestColor = { high: '#1a7f37', medium: '#9a6700', low: '#57606a' }[analysis.interestLevel] || '#57606a';
 
@@ -346,17 +353,19 @@ function handoffEmailHtml(inquiry, analysis) {
     <p><strong>Interest level:</strong> <span style="color:${interestColor};font-weight:bold;text-transform:uppercase;">${escapeHtml(analysis.interestLevel || 'unknown')}</span> — ${escapeHtml(analysis.interestReasoning || '')}</p>
     <p><strong>Company background:</strong> ${analysis.companyBackground ? escapeHtml(analysis.companyBackground) : 'Not available — personal email domain or no reliable information.'}</p>
     <p><strong>Summary:</strong><br>${bodyToHtml(analysis.summary || '')}</p>
+    <p><strong>Full conversation:</strong></p>
+    ${bodyToHtml(conversationTranscript(session))}
   </div>`;
 }
 
-async function sendHandoffEmail(inquiry, analysis) {
+async function sendHandoffEmail(inquiry, analysis, session) {
   await sendViaSendGrid({
     personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
     from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
     subject: `Handoff: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`,
     content: [
-      { type: 'text/plain', value: handoffEmailText(inquiry, analysis) },
-      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis) },
+      { type: 'text/plain', value: handoffEmailText(inquiry, analysis, session) },
+      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis, session) },
     ],
   });
 }
@@ -378,7 +387,7 @@ async function maybeSendHandoff(sessionId, inquiry) {
   session.handoffSent = true;
 
   try {
-    await sendHandoffEmail(inquiry, analysis);
+    await sendHandoffEmail(inquiry, analysis, session);
     console.log(`[HANDOFF] Sent handoff summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
   } catch (err) {
     console.error('[HANDOFF] Failed to send handoff email:', err.message);
@@ -387,9 +396,6 @@ async function maybeSendHandoff(sessionId, inquiry) {
 
 function postHandoffEmailText(inquiry, session, newMessage) {
   const { buyer, listing } = inquiry;
-  const transcript = session.messages
-    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
-    .join('\n\n');
 
   return `New message from ${buyer.full_name} on inquiry ${inquiry.public_id || inquiry.inquiry_id} (${listing.title}) — this inquiry was already handed off.
 
@@ -397,20 +403,17 @@ New message:
 "${newMessage}"
 
 Full conversation so far:
-${transcript}`;
+${conversationTranscript(session)}`;
 }
 
 function postHandoffEmailHtml(inquiry, session, newMessage) {
   const { buyer, listing } = inquiry;
-  const transcript = session.messages
-    .map(m => `${m.role === 'user' ? 'BUYER' : 'THOMAS'}: ${m.content}`)
-    .join('\n\n');
 
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
     <p>New message from <strong>${escapeHtml(buyer.full_name)}</strong> on inquiry <strong>${escapeHtml(String(inquiry.public_id || inquiry.inquiry_id))}</strong> (${escapeHtml(listing.title)}) — this inquiry was already handed off.</p>
     <blockquote style="border-left:3px solid #ccc;margin:0 0 16px;padding-left:12px;color:#333;">${bodyToHtml(newMessage)}</blockquote>
     <p><strong>Full conversation so far:</strong></p>
-    ${bodyToHtml(transcript)}
+    ${bodyToHtml(conversationTranscript(session))}
   </div>`;
 }
 
