@@ -296,21 +296,28 @@ Determine whether Thomas's most recent reply commits to a human IronHub team mem
 
 ${isFreeDomain
   ? `The buyer's email domain (${domain}) is a personal/consumer email provider, not a company domain. Set "companyBackground" to null — do not attempt to research a company.`
-  : `The buyer's email domain (${domain}) appears to be a company domain. If you have reasonably confident general knowledge of this company (industry, size, what they do), give a brief 1-2 sentence background. If you don't recognize the company or aren't confident, set "companyBackground" to null — never invent details.`}
+  : `The buyer's email domain (${domain}) appears to be a company domain. Use the web_search tool to look up "${domain}" and find out what the company does (industry, size, focus) — give a brief 1-2 sentence background based on what you find. If search turns up nothing reliable about this specific company, set "companyBackground" to null — never invent details.`}
 
 Assess interest level based on engagement, urgency, and how readily the buyer has shared qualifying info (timeline, location, etc.) — "high", "medium", or "low".
 
-Respond with ONLY valid JSON, no markdown code fences and no explanation text, matching exactly this shape:
+Once you're done with any research, respond with ONLY valid JSON as your final message, no markdown code fences and no explanation text, matching exactly this shape:
 {"handoff": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 600,
+    max_tokens: 1024,
     system: analysisPrompt,
     messages: [{ role: 'user', content: 'Analyze the conversation now.' }],
+    tools: isFreeDomain ? undefined : [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }],
   });
 
-  return JSON.parse(response.content[0].text.trim());
+  const text = response.content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+    .trim();
+
+  return JSON.parse(text);
 }
 
 function handoffEmailText(inquiry, analysis) {
