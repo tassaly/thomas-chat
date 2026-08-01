@@ -74,6 +74,8 @@ WHAT YOU CAN ANSWER DIRECTLY
 - Listed price (if published in the inquiry context)
 - Public documents — reference only documents listed in the inquiry context
 - City or town level location — never street address, yard name, facility name, or coordinates
+The inquiry context below often includes a full DESCRIPTION and SPECIFICATIONS list for the item. When it does, that is real published data — answer spec questions from it directly and confidently rather than routing them to a specialist. Only escalate specs that genuinely aren't covered there.
+When an asking price is published in the context, share it directly when the buyer asks — don't withhold it or route it internally. If the description notes the price is negotiable, you may say so. Still gather timeline and location for the quote conversation, but answer the price question first.
 
 WHEN YOU DON'T HAVE THE DETAIL
 If a buyer asks about a spec, condition, or anything else not included in the inquiry context, never say things like "the only information I have is what's in the title" or otherwise expose that your knowledge is limited. That reads as useless. Instead, act as a sales administrator coordinating internally: acknowledge the question, ask the buyer what exactly they need to know (their application, required tolerances, etc.) so you can pass along a precise request, and let them know our category specialist will confirm the details and follow up. Never guess or invent the missing detail.
@@ -132,12 +134,106 @@ function fetchInquiry(inquiryId) {
   });
 }
 
-function buildInquiryContext(inquiry) {
+function fetchListing(listingId) {
+  return new Promise((resolve, reject) => {
+    const url = `${IRONHUB_API_URL}/api/v1/listings/${listingId}?api_key=${IRONHUB_API_KEY}`;
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode === 200 && parsed.success !== false) resolve(parsed);
+          else reject(new Error(parsed.error || `API returned ${res.statusCode}`));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Loads the inquiry plus its full listing detail. A listing failure is
+// non-fatal — Thomas falls back to the sparse listing data on the inquiry.
+async function loadInquiry(inquiryId) {
+  const inquiry = await fetchInquiry(inquiryId);
+  let listingDetail = null;
+  const listingId = inquiry.listing && inquiry.listing.id;
+  if (listingId) {
+    try {
+      listingDetail = await fetchListing(listingId);
+    } catch (err) {
+      console.error(`[LISTING] Could not load listing ${listingId}:`, err.message);
+    }
+  }
+  return { inquiry, listingDetail };
+}
+
+function formatAskingPrice(listingDetail) {
+  if (!listingDetail) return null;
+  const amount = Number(listingDetail.price);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const currency = (listingDetail.currency || '').toUpperCase();
+  const formatted = amount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${currency ? `${currency} ` : ''}$${formatted}`;
+}
+
+// Internal/duplicated fields that add noise without telling a buyer anything.
+// `notes` restates the description with markup; the *_uom toggles are display
+// flags; the rest are internal bookkeeping.
+const SKIP_LISTING_FIELDS = new Set([
+  'notes',
+  'diameter__uom',
+  'diameter__use_selected_uom',
+  'Length_uom',
+  'Length__use_selected_uom',
+  'Listing_Title_additional_text',
+  'Listing_Title_Quantity',
+  'Priority',
+  'Package_ID',
+]);
+
+function listingSpecLines(listingDetail) {
+  if (!listingDetail || !Array.isArray(listingDetail.fields)) return [];
+  const seen = new Set();
+  const lines = [];
+  for (const field of listingDetail.fields) {
+    if (!field || SKIP_LISTING_FIELDS.has(field.code)) continue;
+    const name = String(field.name || field.code || '').trim();
+    const value = String(field.value == null ? '' : field.value).trim();
+    if (!name || !value) continue;
+    const key = `${name}|${value}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    lines.push(`- ${name}: ${value}`);
+  }
+  return lines;
+}
+
+function formatListingLocation(listingDetail) {
+  const loc = listingDetail && listingDetail.location;
+  if (!loc) return null;
+  const parts = [loc.city, loc.state, loc.country].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
+function buildInquiryContext(inquiry, listingDetail) {
   const { buyer, listing, public_files, sales_rep } = inquiry;
 
   const docs = public_files && public_files.length > 0
-    ? public_files.map(f => `- ${f.title} (${f.file_name})`).join('\n')
+    ? public_files.map(f => `- ${f.title || f.file_name}`).join('\n')
     : 'None';
+
+  const askingPrice = formatAskingPrice(listingDetail);
+  const specLines = listingSpecLines(listingDetail);
+  const location = formatListingLocation(listingDetail);
+
+  const priceLine = askingPrice
+    ? `Asking price: ${askingPrice} — this is published on the item and you may share it directly with the buyer.`
+    : `Asking price: Not published in this system. This does not mean there is no price expectation — only that a number hasn't been published yet. Never say "priced on application" to the buyer; treat this like any other price question that needs internal confirmation before quoting.`;
 
   return `INQUIRY CONTEXT FOR THIS SESSION:
 Inquiry ID: ${inquiry.inquiry_id}
@@ -147,7 +243,11 @@ ITEM:
 Title: ${listing.title}
 Category: ${listing.category}
 Client: ${listing.client}
-Price: Not published in this system. This does not mean there is no price expectation — only that a number hasn't been published yet. Never say "priced on application" to the buyer; treat this like any other price question that needs internal confirmation before quoting.
+${priceLine}
+${listingDetail && listingDetail.deal_status ? `Availability: ${listingDetail.deal_status}` : ''}
+${location ? `Location: ${location} — you may share the city/town and province, never a street address, yard name, or facility name.` : ''}
+${listingDetail && listingDetail.description ? `\nDESCRIPTION:\n${listingDetail.description}` : ''}
+${specLines.length ? `\nSPECIFICATIONS:\n${specLines.join('\n')}` : ''}
 
 BUYER:
 Name: ${buyer.full_name}
@@ -484,8 +584,8 @@ app.post('/chat', async (req, res) => {
   // Fetch inquiry data on first message if inquiryId provided
   if (inquiryId && !session.inquiryContext) {
     try {
-      const inquiry = await fetchInquiry(inquiryId);
-      session.inquiryContext = buildInquiryContext(inquiry);
+      const { inquiry, listingDetail } = await loadInquiry(inquiryId);
+      session.inquiryContext = buildInquiryContext(inquiry, listingDetail);
       session.buyerName = inquiry.buyer.full_name;
       session.inquiry = inquiry;
     } catch (err) {
@@ -543,8 +643,9 @@ app.post('/assist', async (req, res) => {
   let inquiryData = null;
 
   try {
-    inquiryData = await fetchInquiry(inquiryId);
-    inquiryContext = buildInquiryContext(inquiryData);
+    const loaded = await loadInquiry(inquiryId);
+    inquiryData = loaded.inquiry;
+    inquiryContext = buildInquiryContext(loaded.inquiry, loaded.listingDetail);
   } catch (err) {
     return res.status(404).json({ error: `Could not load inquiry ${inquiryId}: ${err.message}` });
   }
@@ -590,8 +691,9 @@ app.post('/assign', async (req, res) => {
   if (!inquiry_id) return res.status(400).json({ error: 'inquiry_id is required' });
 
   let inquiry;
+  let listingDetail;
   try {
-    inquiry = await fetchInquiry(inquiry_id);
+    ({ inquiry, listingDetail } = await loadInquiry(inquiry_id));
   } catch (err) {
     return res.status(404).json({ error: `Could not load inquiry ${inquiry_id}: ${err.message}` });
   }
@@ -599,7 +701,7 @@ app.post('/assign', async (req, res) => {
   const sessionId = `inquiry-${inquiry_id}`;
   sessions[sessionId] = {
     messages: [],
-    inquiryContext: buildInquiryContext(inquiry),
+    inquiryContext: buildInquiryContext(inquiry, listingDetail),
     buyerName: inquiry.buyer.full_name,
     buyerEmail: inquiry.buyer.email,
     inquiry,
@@ -646,10 +748,10 @@ app.post('/inbound', upload.none(), async (req, res) => {
 
   if (!sessions[sessionId]) {
     try {
-      const inquiry = await fetchInquiry(inquiryId);
+      const { inquiry, listingDetail } = await loadInquiry(inquiryId);
       sessions[sessionId] = {
         messages: [],
-        inquiryContext: buildInquiryContext(inquiry),
+        inquiryContext: buildInquiryContext(inquiry, listingDetail),
         buyerName: inquiry.buyer.full_name,
         buyerEmail: inquiry.buyer.email,
         inquiry,
