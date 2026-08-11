@@ -56,8 +56,8 @@ This is a role-play training session. The person you are speaking with is an Iro
 CONVERSATION RULES
 - Ask one question at a time. Never list multiple questions.
 - Reference the specific equipment by name in every question. Generic questions are not allowed.
-- Never close the conversation unilaterally. Always give the buyer an opportunity to ask more before you wrap up.
-- Never end a conversation on a deflection. After routing a restricted question, always ask one more qualifying question.
+- Give the buyer an opening to ask more before you wrap up — but once you've done that, let the conversation end. Don't manufacture reasons to keep it alive.
+- Try not to end on a bare deflection. After routing a restricted question, you may ask one qualifying question — but only if you haven't already asked one that the buyer left unanswered. If you have, just wrap up.
 - Never volunteer that you are an AI. If directly and explicitly asked, respond honestly: "I'm an AI assistant handling first contact for IronHub — a real equipment specialist will be following up with you shortly."
 - Scripted lines in these instructions are guides for intent — not lines to read verbatim. Always express the same idea in natural, conversational language. Vary your phrasing. Sound like a person, not a bot running a script.
 - With returning buyers, lean into the shared history when asking standard questions.
@@ -104,10 +104,15 @@ Buyers arrange their own transportation by default. If a buyer doesn't have logi
 INSPECTIONS
 If a buyer requests an inspection: "I'll let our operations team know you'd like to arrange an inspection. They'll reach out to you directly to coordinate access with the field."
 
+CONVERSATION LENGTH — THIS IS IMPORTANT
+Your goal is a clean handoff to the IronHub team, not a long conversation. Buyers lose interest fast when they are asked question after question. Keep the whole exchange short — you should be wrapping up within about three replies.
+- NEVER re-ask a question the buyer didn't answer. If they ignored it, skipped it, or answered something else, let it go completely and move on. Do not rephrase it, do not circle back to it later, do not ask it "one more time." Whatever they chose not to give you, the team can ask for later.
+- Ask for information at most once. One unanswered question is a signal to stop asking, not to try a different angle.
+- Don't keep a conversation alive just to gather more. Once you have answered what the buyer asked and made one attempt at the qualifying questions, wrap up — even if you're missing timeline, location, or the quote recipient. An incomplete handoff delivered promptly beats a complete one the buyer abandoned.
+- Wrap up decisively when the buyer's questions are answered and you've committed to what happens next. Don't invent reasons to keep talking.
+
 CLOSING
-After confirming quote recipient, ask one question at a time, in two separate turns — never combine them into one message:
-Step 1 — "Is there anything else on this item you'd like me to look into before I do?"
-Step 2 — Once the buyer responds, ask: "While I have you — are there any other pieces of equipment or material you're looking for that I can help you with?"
+When you wrap up: confirm what you're doing and when they'll hear back, and give them one clear opening to add anything else — for example, whether there's anything else on this item you should look into, or any other equipment they're trying to source. Ask only ONE such question, in a single message, and then let the conversation end. Do not chain follow-up questions to keep it going.
 
 COMPETITIVE / OFFER QUESTIONS
 Never confirm or deny specific offer details. Buyer activity is confidential. You may note the item is actively listed. If timing is a concern, flag it to the team.
@@ -404,15 +409,19 @@ BUYER EMAIL DOMAIN: ${domain}
 CONVERSATION SO FAR:
 ${transcript}
 
-You must make TWO SEPARATE judgements. Do not conflate them.
+Judge ONE thing: "conversationOver" — has this conversation reached the point where Thomas should stop replying and hand the buyer to the IronHub team?
 
-1. "notify" — Does a human IronHub team member now need to get involved? True if Thomas's most recent reply commits to a human following up for any reason: confirming a price, arranging an inspection, tracking down missing specs, or routing a restricted question. This is just a heads-up to the team, so lean towards true.
+The team is only emailed when this is true, so this is the moment of handoff. A short conversation that ends cleanly is the goal — not a long one that gathers every detail.
 
-2. "conversationOver" — Should Thomas STOP replying to this buyer entirely, so that all further messages go to the team instead? This is a much higher bar. Only true if EITHER:
-   (a) the buyer has explicitly asked to be connected to a person, or asked to be put in touch with someone by name, or asked to speak to a human; OR
-   (b) the conversation has genuinely concluded — Thomas has wrapped up, and he is NOT waiting on an answer to anything.
+Set "conversationOver" TRUE when any of these hold:
+   (a) the buyer has asked to be connected to a person, or to be put in touch with someone by name;
+   (b) Thomas has answered what the buyer asked, committed to what happens next, and is only waiting on optional qualifying details (timeline, location, who to copy). Missing those is fine — the team can ask;
+   (c) the buyer has ignored or declined a question Thomas asked, and there is nothing substantive left for Thomas to do;
+   (d) the exchange has run several messages and is winding down.
 
-CRITICAL: Thomas routinely says a specialist will follow up while still actively working the conversation, because his instructions require him to deflect certain questions that way AND ask a further qualifying question in the same reply. That is NOT the conversation ending. If Thomas's most recent reply asks the buyer a question, or is otherwise waiting on information from the buyer, then "conversationOver" is FALSE — he needs to be able to receive the answer. Committing to a follow-up on its own is never sufficient; there must be an explicit request for a person, or a genuine conclusion with nothing outstanding.
+Set "conversationOver" FALSE only when the buyer has asked Thomas something substantive that he has not answered yet, and answering it will move things forward.
+
+Lean towards TRUE. Thomas continuing to press an unresponsive buyer costs more than handing over slightly early — the team can always pick up the thread. Do NOT keep the conversation open merely because a qualifying question went unanswered.
 
 ${isFreeDomain
   ? `The buyer's email domain (${domain}) is a personal/consumer email provider, not a company domain. Set "companyBackground" to null — do not attempt to research a company.`
@@ -421,7 +430,7 @@ ${isFreeDomain
 Assess interest level based on engagement, urgency, and how readily the buyer has shared qualifying info (timeline, location, etc.) — "high", "medium", or "low".
 
 Once you're done with any research, respond with ONLY valid JSON as your final message, no markdown code fences and no explanation text, matching exactly this shape:
-{"notify": boolean, "conversationOver": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
+{"conversationOver": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -449,17 +458,15 @@ function conversationTranscript(session) {
 // Two very different emails share this template: one says "a human needs to do
 // something, Thomas is still talking to the buyer", the other says "Thomas has
 // stopped and this is yours now". Say which, up front.
-const STATUS_ACTIVE_TEXT = 'Thomas is still handling this conversation and is waiting on the buyer. You do not need to reply to the buyer — this is a heads-up that something needs doing on our side.';
 const STATUS_CLOSED_TEXT = 'Thomas has stopped replying to this buyer. Every further message from them comes to this inbox — you are the point of contact from here.';
 
-function handoffEmailSubject(inquiry, closed) {
-  const prefix = closed ? 'Handoff' : 'Action needed';
-  return `${prefix}: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`;
+function handoffEmailSubject(inquiry) {
+  return `Handoff: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`;
 }
 
-function handoffEmailText(inquiry, analysis, session, closed) {
+function handoffEmailText(inquiry, analysis, session) {
   const { buyer, listing } = inquiry;
-  return `Status: ${closed ? STATUS_CLOSED_TEXT : STATUS_ACTIVE_TEXT}
+  return `Status: ${STATUS_CLOSED_TEXT}
 
 Inquiry: ${inquiry.public_id || inquiry.inquiry_id} — ${listing.title}
 Buyer: ${buyer.full_name}${buyer.company ? ` — ${buyer.company}` : ''}
@@ -476,16 +483,14 @@ Full conversation:
 ${conversationTranscript(session)}`;
 }
 
-function handoffEmailHtml(inquiry, analysis, session, closed) {
+function handoffEmailHtml(inquiry, analysis, session) {
   const { buyer, listing } = inquiry;
   const interestColor = { high: '#1a7f37', medium: '#9a6700', low: '#57606a' }[analysis.interestLevel] || '#57606a';
-  const statusBg = closed ? '#FDF2F2' : '#F1F8F4';
-  const statusBorder = closed ? '#D98282' : '#7FB894';
 
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
-    <p style="margin:0 0 20px;padding:12px 16px;background:${statusBg};border-left:4px solid ${statusBorder};">
-      <strong>${closed ? 'Handed off to you' : 'Action needed — conversation still active'}</strong><br>
-      ${escapeHtml(closed ? STATUS_CLOSED_TEXT : STATUS_ACTIVE_TEXT)}
+    <p style="margin:0 0 20px;padding:12px 16px;background:#FDF2F2;border-left:4px solid #D98282;">
+      <strong>Handed off to you</strong><br>
+      ${escapeHtml(STATUS_CLOSED_TEXT)}
     </p>
     <p><strong>Inquiry:</strong> ${escapeHtml(String(inquiry.public_id || inquiry.inquiry_id))} — ${escapeHtml(listing.title)}</p>
     <p><strong>Buyer:</strong> ${escapeHtml(buyer.full_name)}${buyer.company ? ` — ${escapeHtml(buyer.company)}` : ''}<br>
@@ -498,26 +503,31 @@ function handoffEmailHtml(inquiry, analysis, session, closed) {
   </div>`;
 }
 
-async function sendHandoffEmail(inquiry, analysis, session, closed) {
+async function sendHandoffEmail(inquiry, analysis, session) {
   await sendViaSendGrid({
     personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
     from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
     reply_to: { email: inquiry.buyer.email },
-    subject: handoffEmailSubject(inquiry, closed),
+    subject: handoffEmailSubject(inquiry),
     content: [
-      { type: 'text/plain', value: handoffEmailText(inquiry, analysis, session, closed) },
-      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis, session, closed) },
+      { type: 'text/plain', value: handoffEmailText(inquiry, analysis, session) },
+      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis, session) },
     ],
   });
 }
 
-// Notifying the team and muting Thomas are separate decisions. Thomas commits
-// to human follow-up routinely while still working a conversation, so the
-// summary email can fire well before he should stop replying.
+// The team is emailed exactly once, at the point the conversation closes.
+// No mid-conversation notifications — a handoff is the unit of work, and a
+// partial one delivered promptly beats a complete one the buyer abandoned.
+const MAX_THOMAS_REPLIES = 3;
+
+function thomasReplyCount(session) {
+  return session.messages.filter(m => m.role === 'assistant').length;
+}
+
 async function maybeSendHandoff(sessionId, inquiry) {
   const session = sessions[sessionId];
-  if (!session || !inquiry) return;
-  if (session.handoffNotified && session.conversationOver) return;
+  if (!session || !inquiry || session.conversationOver) return;
 
   let analysis;
   try {
@@ -529,35 +539,25 @@ async function maybeSendHandoff(sessionId, inquiry) {
 
   if (!analysis) return;
 
-  // A closed conversation always warrants the summary, even if the analyzer
-  // somehow flagged only one of the two.
-  const shouldNotify = analysis.notify || analysis.conversationOver;
-  const closing = Boolean(analysis.conversationOver) && !session.conversationOver;
-  const notifyingNow = shouldNotify && !session.handoffNotified;
+  // Backstop: however the analyzer judges it, don't let Thomas keep going
+  // past the reply budget. Prompts drift; this doesn't.
+  const budgetSpent = thomasReplyCount(session) >= MAX_THOMAS_REPLIES;
+  if (!analysis.conversationOver && !budgetSpent) return;
 
-  if (notifyingNow) {
-    session.handoffNotified = true;
-    try {
-      await sendHandoffEmail(inquiry, analysis, session, closing);
-      console.log(`[HANDOFF] Sent ${closing ? 'handoff' : 'action-needed'} summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
-    } catch (err) {
-      console.error('[HANDOFF] Failed to send handoff email:', err.message);
-      session.handoffNotified = false;
-    }
-  } else if (closing) {
-    // Already sent an "action needed" email earlier saying Thomas was still
-    // handling this. Ownership is transferring now, so say so.
-    try {
-      await sendHandoffEmail(inquiry, analysis, session, true);
-      console.log(`[HANDOFF] Sent handoff notice for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
-    } catch (err) {
-      console.error('[HANDOFF] Failed to send handoff notice:', err.message);
-    }
+  if (budgetSpent && !analysis.conversationOver) {
+    console.log(`[HANDOFF] Inquiry ${inquiry.inquiry_id} — closing on reply budget (${MAX_THOMAS_REPLIES})`);
   }
 
-  if (analysis.conversationOver && !session.conversationOver) {
-    session.conversationOver = true;
-    console.log(`[HANDOFF] Inquiry ${inquiry.inquiry_id} — conversation closed; further buyer messages go to ${HANDOFF_EMAIL}`);
+  session.conversationOver = true;
+
+  try {
+    await sendHandoffEmail(inquiry, analysis, session);
+    console.log(`[HANDOFF] Inquiry ${inquiry.inquiry_id} handed off to ${HANDOFF_EMAIL}; further buyer messages forward there`);
+  } catch (err) {
+    console.error('[HANDOFF] Failed to send handoff email:', err.message);
+    // Leave the conversation closed — Thomas has already said his goodbye.
+    // Better a missed email we can see in the logs than a buyer talking to
+    // a Thomas who thinks the conversation is still open.
   }
 }
 
@@ -589,7 +589,7 @@ async function forwardPostHandoffMessage(inquiry, session, newMessage) {
     personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
     from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
     reply_to: { email: inquiry.buyer.email },
-    subject: `Re: ${handoffEmailSubject(inquiry, true)}`,
+    subject: `Re: ${handoffEmailSubject(inquiry)}`,
     content: [
       { type: 'text/plain', value: postHandoffEmailText(inquiry, session, newMessage) },
       { type: 'text/html', value: postHandoffEmailHtml(inquiry, session, newMessage) },
