@@ -404,7 +404,15 @@ BUYER EMAIL DOMAIN: ${domain}
 CONVERSATION SO FAR:
 ${transcript}
 
-Determine whether Thomas's most recent reply commits to a human IronHub team member following up with the buyer directly, for any reason — confirming a price, arranging an inspection, tracking down missing specs, or because the buyer explicitly asked for a human. If so, "handoff" is true.
+You must make TWO SEPARATE judgements. Do not conflate them.
+
+1. "notify" — Does a human IronHub team member now need to get involved? True if Thomas's most recent reply commits to a human following up for any reason: confirming a price, arranging an inspection, tracking down missing specs, or routing a restricted question. This is just a heads-up to the team, so lean towards true.
+
+2. "conversationOver" — Should Thomas STOP replying to this buyer entirely, so that all further messages go to the team instead? This is a much higher bar. Only true if EITHER:
+   (a) the buyer has explicitly asked to be connected to a person, or asked to be put in touch with someone by name, or asked to speak to a human; OR
+   (b) the conversation has genuinely concluded — Thomas has wrapped up, and he is NOT waiting on an answer to anything.
+
+CRITICAL: Thomas routinely says a specialist will follow up while still actively working the conversation, because his instructions require him to deflect certain questions that way AND ask a further qualifying question in the same reply. That is NOT the conversation ending. If Thomas's most recent reply asks the buyer a question, or is otherwise waiting on information from the buyer, then "conversationOver" is FALSE — he needs to be able to receive the answer. Committing to a follow-up on its own is never sufficient; there must be an explicit request for a person, or a genuine conclusion with nothing outstanding.
 
 ${isFreeDomain
   ? `The buyer's email domain (${domain}) is a personal/consumer email provider, not a company domain. Set "companyBackground" to null — do not attempt to research a company.`
@@ -413,7 +421,7 @@ ${isFreeDomain
 Assess interest level based on engagement, urgency, and how readily the buyer has shared qualifying info (timeline, location, etc.) — "high", "medium", or "low".
 
 Once you're done with any research, respond with ONLY valid JSON as your final message, no markdown code fences and no explanation text, matching exactly this shape:
-{"handoff": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
+{"notify": boolean, "conversationOver": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -483,9 +491,13 @@ async function sendHandoffEmail(inquiry, analysis, session) {
   });
 }
 
+// Notifying the team and muting Thomas are separate decisions. Thomas commits
+// to human follow-up routinely while still working a conversation, so the
+// summary email can fire well before he should stop replying.
 async function maybeSendHandoff(sessionId, inquiry) {
   const session = sessions[sessionId];
-  if (!session || !inquiry || session.handoffSent) return;
+  if (!session || !inquiry) return;
+  if (session.handoffNotified && session.conversationOver) return;
 
   let analysis;
   try {
@@ -495,15 +507,26 @@ async function maybeSendHandoff(sessionId, inquiry) {
     return;
   }
 
-  if (!analysis || !analysis.handoff) return;
+  if (!analysis) return;
 
-  session.handoffSent = true;
+  // A closed conversation always warrants the summary, even if the analyzer
+  // somehow flagged only one of the two.
+  const shouldNotify = analysis.notify || analysis.conversationOver;
 
-  try {
-    await sendHandoffEmail(inquiry, analysis, session);
-    console.log(`[HANDOFF] Sent handoff summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
-  } catch (err) {
-    console.error('[HANDOFF] Failed to send handoff email:', err.message);
+  if (shouldNotify && !session.handoffNotified) {
+    session.handoffNotified = true;
+    try {
+      await sendHandoffEmail(inquiry, analysis, session);
+      console.log(`[HANDOFF] Sent handoff summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
+    } catch (err) {
+      console.error('[HANDOFF] Failed to send handoff email:', err.message);
+      session.handoffNotified = false;
+    }
+  }
+
+  if (analysis.conversationOver && !session.conversationOver) {
+    session.conversationOver = true;
+    console.log(`[HANDOFF] Inquiry ${inquiry.inquiry_id} — conversation closed; further buyer messages go to ${HANDOFF_EMAIL}`);
   }
 }
 
@@ -604,7 +627,7 @@ app.post('/chat', async (req, res) => {
     }
   }
 
-  if (session.handoffSent && session.inquiry) {
+  if (session.conversationOver && session.inquiry) {
     session.messages.push({ role: 'user', content: message });
     try {
       await forwardPostHandoffMessage(session.inquiry, session, message);
@@ -775,7 +798,7 @@ app.post('/inbound', upload.none(), async (req, res) => {
 
   const session = sessions[sessionId];
 
-  if (session.handoffSent) {
+  if (session.conversationOver) {
     session.messages.push({ role: 'user', content: buyerMessage });
     try {
       await forwardPostHandoffMessage(session.inquiry, session, buyerMessage);
