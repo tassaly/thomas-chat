@@ -13,6 +13,14 @@ const IRONHUB_API_URL = process.env.IRONHUB_API_URL || 'https://app.theironhub.c
 const THOMAS_WEBHOOK_SECRET = process.env.THOMAS_WEBHOOK_SECRET;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const THOMAS_SERVER_URL = process.env.THOMAS_SERVER_URL || 'https://thomas-chat-production.up.railway.app';
+// Subdomain buyer replies come back to. Must have an MX record pointing at
+// mx.sendgrid.net AND a matching SendGrid Inbound Parse host routed to
+// /inbound — replies bounce or vanish silently if either is missing.
+const THOMAS_REPLY_DOMAIN = process.env.THOMAS_REPLY_DOMAIN || 'replies.theironhub.com';
+
+function replyToAddress(inquiryId) {
+  return `thomas+inquiry-${inquiryId}@${THOMAS_REPLY_DOMAIN}`;
+}
 
 const SIGNATURE_TEXT = `Thomas | Sales Support
 T: (587) 783-8393 | Toll Free: 1-833-IRONHUB
@@ -716,7 +724,7 @@ app.post('/assign', async (req, res) => {
       to: inquiry.buyer.email,
       subject: `Re: ${inquiry.listing.title}`,
       body: reply,
-      replyTo: `thomas+inquiry-${inquiry_id}@replies.theironhub.com`,
+      replyTo: replyToAddress(inquiry_id),
     });
     console.log(`[ASSIGN] Inquiry ${inquiry_id} — opening email sent to ${inquiry.buyer.email}`);
     maybeSendHandoff(sessionId, inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
@@ -784,7 +792,7 @@ app.post('/inbound', upload.none(), async (req, res) => {
       to: session.buyerEmail,
       subject: `Re: ${req.body.subject || 'Your inquiry'}`,
       body: reply,
-      replyTo: `thomas+inquiry-${inquiryId}@replies.theironhub.com`,
+      replyTo: replyToAddress(inquiryId),
     });
     console.log(`[INBOUND] Inquiry ${inquiryId} — reply sent to ${session.buyerEmail}`);
     maybeSendHandoff(sessionId, session.inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
