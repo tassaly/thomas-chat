@@ -446,9 +446,22 @@ function conversationTranscript(session) {
     .join('\n\n');
 }
 
-function handoffEmailText(inquiry, analysis, session) {
+// Two very different emails share this template: one says "a human needs to do
+// something, Thomas is still talking to the buyer", the other says "Thomas has
+// stopped and this is yours now". Say which, up front.
+const STATUS_ACTIVE_TEXT = 'Thomas is still handling this conversation and is waiting on the buyer. You do not need to reply to the buyer — this is a heads-up that something needs doing on our side.';
+const STATUS_CLOSED_TEXT = 'Thomas has stopped replying to this buyer. Every further message from them comes to this inbox — you are the point of contact from here.';
+
+function handoffEmailSubject(inquiry, closed) {
+  const prefix = closed ? 'Handoff' : 'Action needed';
+  return `${prefix}: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`;
+}
+
+function handoffEmailText(inquiry, analysis, session, closed) {
   const { buyer, listing } = inquiry;
-  return `Inquiry: ${inquiry.public_id || inquiry.inquiry_id} — ${listing.title}
+  return `Status: ${closed ? STATUS_CLOSED_TEXT : STATUS_ACTIVE_TEXT}
+
+Inquiry: ${inquiry.public_id || inquiry.inquiry_id} — ${listing.title}
 Buyer: ${buyer.full_name}${buyer.company ? ` — ${buyer.company}` : ''}
 ${buyer.email}${buyer.phone_number ? ` · ${buyer.phone_number}` : ''}
 
@@ -463,11 +476,17 @@ Full conversation:
 ${conversationTranscript(session)}`;
 }
 
-function handoffEmailHtml(inquiry, analysis, session) {
+function handoffEmailHtml(inquiry, analysis, session, closed) {
   const { buyer, listing } = inquiry;
   const interestColor = { high: '#1a7f37', medium: '#9a6700', low: '#57606a' }[analysis.interestLevel] || '#57606a';
+  const statusBg = closed ? '#FDF2F2' : '#F1F8F4';
+  const statusBorder = closed ? '#D98282' : '#7FB894';
 
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
+    <p style="margin:0 0 20px;padding:12px 16px;background:${statusBg};border-left:4px solid ${statusBorder};">
+      <strong>${closed ? 'Handed off to you' : 'Action needed — conversation still active'}</strong><br>
+      ${escapeHtml(closed ? STATUS_CLOSED_TEXT : STATUS_ACTIVE_TEXT)}
+    </p>
     <p><strong>Inquiry:</strong> ${escapeHtml(String(inquiry.public_id || inquiry.inquiry_id))} — ${escapeHtml(listing.title)}</p>
     <p><strong>Buyer:</strong> ${escapeHtml(buyer.full_name)}${buyer.company ? ` — ${escapeHtml(buyer.company)}` : ''}<br>
     ${escapeHtml(buyer.email)}${buyer.phone_number ? ` · ${escapeHtml(buyer.phone_number)}` : ''}</p>
@@ -479,14 +498,15 @@ function handoffEmailHtml(inquiry, analysis, session) {
   </div>`;
 }
 
-async function sendHandoffEmail(inquiry, analysis, session) {
+async function sendHandoffEmail(inquiry, analysis, session, closed) {
   await sendViaSendGrid({
     personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
     from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
-    subject: `Handoff: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`,
+    reply_to: { email: inquiry.buyer.email },
+    subject: handoffEmailSubject(inquiry, closed),
     content: [
-      { type: 'text/plain', value: handoffEmailText(inquiry, analysis, session) },
-      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis, session) },
+      { type: 'text/plain', value: handoffEmailText(inquiry, analysis, session, closed) },
+      { type: 'text/html', value: handoffEmailHtml(inquiry, analysis, session, closed) },
     ],
   });
 }
@@ -512,15 +532,26 @@ async function maybeSendHandoff(sessionId, inquiry) {
   // A closed conversation always warrants the summary, even if the analyzer
   // somehow flagged only one of the two.
   const shouldNotify = analysis.notify || analysis.conversationOver;
+  const closing = Boolean(analysis.conversationOver) && !session.conversationOver;
+  const notifyingNow = shouldNotify && !session.handoffNotified;
 
-  if (shouldNotify && !session.handoffNotified) {
+  if (notifyingNow) {
     session.handoffNotified = true;
     try {
-      await sendHandoffEmail(inquiry, analysis, session);
-      console.log(`[HANDOFF] Sent handoff summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
+      await sendHandoffEmail(inquiry, analysis, session, closing);
+      console.log(`[HANDOFF] Sent ${closing ? 'handoff' : 'action-needed'} summary for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
     } catch (err) {
       console.error('[HANDOFF] Failed to send handoff email:', err.message);
       session.handoffNotified = false;
+    }
+  } else if (closing) {
+    // Already sent an "action needed" email earlier saying Thomas was still
+    // handling this. Ownership is transferring now, so say so.
+    try {
+      await sendHandoffEmail(inquiry, analysis, session, true);
+      console.log(`[HANDOFF] Sent handoff notice for inquiry ${inquiry.inquiry_id} to ${HANDOFF_EMAIL}`);
+    } catch (err) {
+      console.error('[HANDOFF] Failed to send handoff notice:', err.message);
     }
   }
 
@@ -558,7 +589,7 @@ async function forwardPostHandoffMessage(inquiry, session, newMessage) {
     personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
     from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
     reply_to: { email: inquiry.buyer.email },
-    subject: `Re: Handoff: ${inquiry.public_id || inquiry.inquiry_id} — ${inquiry.buyer.full_name} (${inquiry.listing.title})`,
+    subject: `Re: ${handoffEmailSubject(inquiry, true)}`,
     content: [
       { type: 'text/plain', value: postHandoffEmailText(inquiry, session, newMessage) },
       { type: 'text/html', value: postHandoffEmailHtml(inquiry, session, newMessage) },
