@@ -114,6 +114,8 @@ Your goal is a clean handoff to the IronHub team, not a long conversation. Buyer
 CLOSING
 When you wrap up: confirm what you're doing and when they'll hear back, and give them one clear opening to add anything else — for example, whether there's anything else on this item you should look into, or any other equipment they're trying to source. Ask only ONE such question, in a single message, and then let the conversation end. Do not chain follow-up questions to keep it going.
 
+When the buyer has already told you they're done — "that's all I need", "nothing else for now", or a thank-you that raises nothing new — do NOT ask them anything at all. Confirm what you're passing to the team, tell them who will follow up, and sign off. A question here reads as not listening, and it holds up the handoff for no reason.
+
 COMPETITIVE / OFFER QUESTIONS
 Never confirm or deny specific offer details. Buyer activity is confidential. You may note the item is actively listed. If timing is a concern, flag it to the team.
 
@@ -284,17 +286,28 @@ const sessions = {};
 function stripQuotedEmail(text) {
   if (!text) return '';
   const markers = [
-    /^On .+wrote:/m,
+    // Gmail wraps long attribution lines, so "wrote:" often lands on a later
+    // line than "On ..." — this has to cross newlines to match at all. Bounded
+    // and lazy so a stray "On " early in the message can't swallow the body.
+    /^On [\s\S]{0,300}?wrote:/m,
     /^From:/m,
+    // A quoted block is the reply chain even when the attribution is missing
+    // or in a format we don't recognise.
+    /^>/m,
     /^-{3,}/m,
     /^_{3,}/m,
   ];
   let result = text;
   for (const marker of markers) {
     const idx = result.search(marker);
-    if (idx > 20) result = result.substring(0, idx);
+    if (idx > 0) result = result.substring(0, idx);
   }
-  return result.trim();
+  result = result.trim();
+  // "Yes please." is 11 characters and is a perfectly good reply, so the cut
+  // can't be gated on the marker appearing some distance in. Guard the real
+  // risk instead: a message that was nothing but quoted history strips to
+  // empty, and an empty turn is worse than a noisy one.
+  return result || text.trim();
 }
 
 async function generateThomasReply(sessionId, userMessage) {
@@ -399,6 +412,7 @@ async function analyzeForHandoff(session, inquiry) {
 
   const domain = emailDomain(inquiry.buyer.email);
   const isFreeDomain = FREE_EMAIL_DOMAINS.has(domain);
+  const awaitingAnswer = thomasAwaitingAnswer(session);
 
   const analysisPrompt = `You are reviewing a sales conversation between a buyer and Thomas, an AI sales assistant at IronHub, to prepare a handoff summary for a human IronHub team member who will take over.
 
@@ -409,19 +423,25 @@ BUYER EMAIL DOMAIN: ${domain}
 CONVERSATION SO FAR:
 ${transcript}
 
+${awaitingAnswer
+  ? 'NOTE: Thomas\'s latest reply is the last message in this conversation and it puts a question to the buyer. The buyer has not replied to it yet.'
+  : 'NOTE: The buyer has had the last word — there is no unanswered question from Thomas sitting in their inbox.'}
+
 Judge ONE thing: "conversationOver" — has this conversation reached the point where Thomas should stop replying and hand the buyer to the IronHub team?
 
-The team is only emailed when this is true, so this is the moment of handoff. A short conversation that ends cleanly is the goal — not a long one that gathers every detail.
+The team is emailed exactly once, at this moment, so the handoff has to land on the buyer's last word — not before they have had the chance to give it. Judge from the BUYER's most recent message. What Thomas has promised to do is NOT evidence the conversation is over: Thomas answers the question and commits to next steps in every single reply, so that pattern tells you nothing.
 
 Set "conversationOver" TRUE when any of these hold:
    (a) the buyer has asked to be connected to a person, or to be put in touch with someone by name;
-   (b) Thomas has answered what the buyer asked, committed to what happens next, and is only waiting on optional qualifying details (timeline, location, who to copy). Missing those is fine — the team can ask;
-   (c) the buyer has ignored or declined a question Thomas asked, and there is nothing substantive left for Thomas to do;
-   (d) the exchange has run several messages and is winding down.
+   (b) the buyer has signalled they are finished — "that's all I need", "nothing else for now", or a thank-you that raises no new question;
+   (c) the only thing the buyer is still waiting on is something a human has to do — source drawings or documents, respond to an offer, book an inspection — and Thomas has already told them it is going to the team;
+   (d) Thomas asked the buyer something and the buyer's reply passed over it, with nothing substantive left for Thomas to do.
 
-Set "conversationOver" FALSE only when the buyer has asked Thomas something substantive that he has not answered yet, and answering it will move things forward.
+Set "conversationOver" FALSE when either of these holds:
+   - Thomas's latest reply puts a question to the buyer that the buyer has not answered yet. They are owed the chance to answer before the door closes. This is the normal case immediately after Thomas replies;
+   - the buyer's last message raised something substantive that Thomas has not addressed.
 
-Lean towards TRUE. Thomas continuing to press an unresponsive buyer costs more than handing over slightly early — the team can always pick up the thread. Do NOT keep the conversation open merely because a qualifying question went unanswered.
+Don't hold the conversation open just to collect optional qualifying details — timeline, location, who to copy. Missing those is fine; the team can ask. But a question Thomas actually put to the buyer is not an optional detail, and closing before they can answer it strands their reply outside the handoff.
 
 ${isFreeDomain
   ? `The buyer's email domain (${domain}) is a personal/consumer email provider, not a company domain. Set "companyBackground" to null — do not attempt to research a company.`
@@ -525,6 +545,14 @@ function thomasReplyCount(session) {
   return session.messages.filter(m => m.role === 'assistant').length;
 }
 
+// True when the last word in the conversation is a question from Thomas. The
+// buyer is owed the chance to answer it: closing here strands their reply
+// outside the handoff, which is exactly what the team needs to see.
+function thomasAwaitingAnswer(session) {
+  const last = session.messages[session.messages.length - 1];
+  return !!last && last.role === 'assistant' && last.content.includes('?');
+}
+
 async function maybeSendHandoff(sessionId, inquiry) {
   const session = sessions[sessionId];
   if (!session || !inquiry || session.conversationOver) return;
@@ -542,6 +570,19 @@ async function maybeSendHandoff(sessionId, inquiry) {
   // Backstop: however the analyzer judges it, don't let Thomas keep going
   // past the reply budget. Prompts drift; this doesn't.
   const budgetSpent = thomasReplyCount(session) >= MAX_THOMAS_REPLIES;
+
+  // The mirror backstop. Thomas ends nearly every reply with a question, and an
+  // analyzer that closes on his promises rather than the buyer's answer hands
+  // off after reply #1 every time — the buyer's real last word then arrives as
+  // an orphaned forward. Hold the door until they've answered, or the budget is
+  // gone (an unanswered question is precisely what running out of budget means).
+  if (thomasAwaitingAnswer(session) && !budgetSpent) {
+    if (analysis.conversationOver) {
+      console.log(`[HANDOFF] Inquiry ${inquiry.inquiry_id} — analyzer said closed, but Thomas is awaiting an answer; holding`);
+    }
+    return;
+  }
+
   if (!analysis.conversationOver && !budgetSpent) return;
 
   if (budgetSpent && !analysis.conversationOver) {
