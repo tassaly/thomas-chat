@@ -22,6 +22,19 @@ function replyToAddress(inquiryId) {
   return `thomas+inquiry-${inquiryId}@${THOMAS_REPLY_DOMAIN}`;
 }
 
+// Answering a buyer's email in two seconds is the loudest tell that they are
+// not talking to a person, so hold Thomas's replies before sending. Jittered,
+// because a reply that lands exactly 180s later every time is its own tell.
+// Set THOMAS_REPLY_DELAY_MS=0 to send immediately.
+const REPLY_DELAY_MS = Number(process.env.THOMAS_REPLY_DELAY_MS ?? 3 * 60 * 1000);
+const REPLY_DELAY_JITTER = 0.3;
+
+function replyDelayMs() {
+  if (!(REPLY_DELAY_MS > 0)) return 0;
+  const spread = REPLY_DELAY_MS * REPLY_DELAY_JITTER;
+  return Math.round(REPLY_DELAY_MS - spread + Math.random() * spread * 2);
+}
+
 const SIGNATURE_TEXT = `Thomas | Sales Support
 T: (587) 783-8393 | Toll Free: 1-833-IRONHUB
 E: sales@theironhub.com | W: www.theironhub.com`;
@@ -310,13 +323,16 @@ function stripQuotedEmail(text) {
   return result || text.trim();
 }
 
-async function generateThomasReply(sessionId, userMessage) {
+// userMessage is optional: the email paths record the buyer's message when it
+// arrives and generate the reply later, once the delay has run out, so that
+// anything else they send in the meantime is already in the transcript.
+async function generateThomasReply(sessionId, userMessage = null) {
   const session = sessions[sessionId];
   const systemPrompt = session.inquiryContext
     ? `${THOMAS_BASE_PROMPT}\n\n${session.inquiryContext}`
     : THOMAS_BASE_PROMPT;
 
-  session.messages.push({ role: 'user', content: userMessage });
+  if (userMessage !== null) session.messages.push({ role: 'user', content: userMessage });
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -781,6 +797,7 @@ app.post('/assist', async (req, res) => {
 app.post('/reset', (req, res) => {
   const { sessionId } = req.body;
   if (sessionId && sessions[sessionId]) {
+    cancelPendingReply(sessionId);
     delete sessions[sessionId];
   }
   res.json({ ok: true });
@@ -805,29 +822,24 @@ app.post('/assign', async (req, res) => {
   }
 
   const sessionId = `inquiry-${inquiry_id}`;
+  cancelPendingReply(sessionId);
   sessions[sessionId] = {
-    messages: [],
+    messages: [{ role: 'user', content: inquiry.buyer.message }],
     inquiryContext: buildInquiryContext(inquiry, listingDetail),
     buyerName: inquiry.buyer.full_name,
     buyerEmail: inquiry.buyer.email,
     inquiry,
   };
 
-  try {
-    const reply = await generateThomasReply(sessionId, inquiry.buyer.message);
-    await sendEmail({
-      to: inquiry.buyer.email,
-      subject: `Re: ${inquiry.listing.title}`,
-      body: reply,
-      replyTo: replyToAddress(inquiry_id),
-    });
-    console.log(`[ASSIGN] Inquiry ${inquiry_id} — opening email sent to ${inquiry.buyer.email}`);
-    maybeSendHandoff(sessionId, inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[ASSIGN] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  // The opening reply is the one a buyer clocks hardest — they just pressed
+  // submit, so an answer landing seconds later can only be a machine. Schedule
+  // it and answer the caller now rather than holding the request open.
+  const delay = scheduleThomasReply(sessionId, {
+    subject: `Re: ${inquiry.listing.title}`,
+    inquiryId: inquiry_id,
+  });
+  console.log(`[ASSIGN] Inquiry ${inquiry_id} — opening email queued for ${inquiry.buyer.email}`);
+  res.json({ ok: true, replyingInSeconds: Math.round(delay / 1000) });
 });
 
 // Called by SendGrid inbound parse when buyer replies
@@ -881,20 +893,74 @@ app.post('/inbound', upload.none(), async (req, res) => {
     return;
   }
 
-  try {
-    const reply = await generateThomasReply(sessionId, buyerMessage);
-    await sendEmail({
-      to: session.buyerEmail,
-      subject: `Re: ${req.body.subject || 'Your inquiry'}`,
-      body: reply,
-      replyTo: replyToAddress(inquiryId),
-    });
-    console.log(`[INBOUND] Inquiry ${inquiryId} — reply sent to ${session.buyerEmail}`);
-    maybeSendHandoff(sessionId, session.inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
-  } catch (err) {
-    console.error(`[INBOUND] Error for inquiry ${inquiryId}:`, err.message);
-  }
+  // Record the message now, answer it on a delay. Generating the reply later
+  // means it accounts for anything else the buyer sends while the clock runs.
+  session.messages.push({ role: 'user', content: buyerMessage });
+  scheduleThomasReply(sessionId, {
+    subject: `Re: ${req.body.subject || 'Your inquiry'}`,
+    inquiryId,
+  });
 });
+
+// One pending reply per inquiry, keyed by session id.
+const pendingReplies = {};
+
+// A timer outliving its session is a duplicate reply waiting to happen: reset
+// or reassign an inquiry and the stale timer fires against the new session.
+function cancelPendingReply(sessionId) {
+  const pending = pendingReplies[sessionId];
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  delete pendingReplies[sessionId];
+}
+
+function scheduleThomasReply(sessionId, { subject, inquiryId }) {
+  const pending = pendingReplies[sessionId];
+
+  // A reply is already waiting on the clock. The buyer's newest message is
+  // already in the transcript, so that pending reply will answer both at once —
+  // which is what a person who found two emails in their inbox would do. Thread
+  // onto the newer subject and let the original timer stand, so a buyer sending
+  // three quick notes can't push Thomas's answer further and further away.
+  if (pending) {
+    pending.subject = subject;
+    console.log(`[REPLY] Inquiry ${inquiryId} — folded into the reply already pending`);
+    return 0;
+  }
+
+  const delay = replyDelayMs();
+  const record = { subject };
+  record.timer = setTimeout(() => {
+    delete pendingReplies[sessionId];
+    deliverThomasReply(sessionId, record.subject, inquiryId)
+      .catch(err => console.error(`[REPLY] Inquiry ${inquiryId} — delivery failed:`, err.message));
+  }, delay);
+  pendingReplies[sessionId] = record;
+
+  console.log(`[REPLY] Inquiry ${inquiryId} — replying in ${Math.round(delay / 1000)}s`);
+  return delay;
+}
+
+async function deliverThomasReply(sessionId, subject, inquiryId) {
+  const session = sessions[sessionId];
+  if (!session) {
+    // Sessions live in memory, so a redeploy inside the delay window drops the
+    // reply entirely. Say so loudly — silence towards a buyer is the worst
+    // failure this service has.
+    console.error(`[REPLY] Inquiry ${inquiryId} — session was lost before the reply went out; buyer received nothing`);
+    return;
+  }
+
+  const reply = await generateThomasReply(sessionId);
+  await sendEmail({
+    to: session.buyerEmail,
+    subject,
+    body: reply,
+    replyTo: replyToAddress(inquiryId),
+  });
+  console.log(`[REPLY] Inquiry ${inquiryId} — reply sent to ${session.buyerEmail}`);
+  maybeSendHandoff(sessionId, session.inquiry).catch(err => console.error('[HANDOFF] error:', err.message));
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
