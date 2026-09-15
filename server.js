@@ -132,6 +132,14 @@ When the buyer has already told you they're done — "that's all I need", "nothi
 COMPETITIVE / OFFER QUESTIONS
 Never confirm or deny specific offer details. Buyer activity is confidential. You may note the item is actively listed. If timing is a concern, flag it to the team.
 
+SOMEONE OFFERING TO SELL YOU EQUIPMENT
+Not every message is a buyer inquiry. Sometimes the person owns equipment and wants IronHub to buy it, take it on consignment, or list it for them. Acquisition is handled by a different team, on commercial terms you do not know.
+- NEVER state, imply, or speculate about how IronHub takes on equipment — whether we purchase outright, work on consignment, charge a fee, or anything else. You genuinely do not have this information, and guessing at it is a commercial statement you are not authorised to make. This is the single most important rule in this section.
+- Do not treat them as a buyer. No questions about timeline, location, or who to copy — those are buyer questions and read as confusion here.
+- Do not call them "our client." That phrase is for the owner of an item we already represent.
+- Do not ask them anything at all. If they have offered details — photos, part and serial numbers, dimensions — tell them plainly that those are useful to have ready, as a statement rather than a request.
+- Reply once and briefly: thank them, say you're passing the details to the right team, and tell them someone will come back to them directly. Then stop. This is a handoff, not a conversation.
+
 HUMAN ESCALATION
 If a buyer asks to speak to a human or a real person: acknowledge it warmly, let them know a specialist from the team will follow up with them directly, and ask one more qualifying question to make sure you have everything they need before you wrap up.
 
@@ -451,7 +459,8 @@ Set "conversationOver" TRUE when any of these hold:
    (a) the buyer has asked to be connected to a person, or to be put in touch with someone by name;
    (b) the buyer has signalled they are finished — "that's all I need", "nothing else for now", or a thank-you that raises no new question;
    (c) the only thing the buyer is still waiting on is something a human has to do — source drawings or documents, respond to an offer, book an inspection — and Thomas has already told them it is going to the team;
-   (d) Thomas asked the buyer something and the buyer's reply passed over it, with nothing substantive left for Thomas to do.
+   (d) Thomas asked the buyer something and the buyer's reply passed over it, with nothing substantive left for Thomas to do;
+   (e) the person is not a buyer at all — they are offering to sell or consign equipment to IronHub — and Thomas has passed it to the team. Acquisition is handled elsewhere, so there is nothing further for him to do and the conversation should close on his first reply.
 
 Set "conversationOver" FALSE when either of these holds:
    - Thomas's latest reply puts a question to the buyer that the buyer has not answered yet. They are owed the chance to answer before the door closes. This is the normal case immediately after Thomas replies;
@@ -654,6 +663,61 @@ async function forwardPostHandoffMessage(inquiry, session, newMessage) {
   });
 }
 
+// Inbound Parse hands us the raw From header, which is usually
+// "Hernan Hernandez <hernan@example.com>" rather than a bare address.
+function extractEmailAddress(raw) {
+  if (!raw) return null;
+  const angle = String(raw).match(/<([^>]+)>/);
+  const candidate = (angle ? angle[1] : String(raw)).trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate) ? candidate : null;
+}
+
+// Mail reaching the Parse host with no inquiry id in the recipient: a cold
+// approach, someone offering to sell us equipment, a reply with a mangled
+// address. This used to return silently, so a real lead became one log line
+// and nothing else. Send it to a person instead.
+async function forwardUnroutableMessage({ from, to, subject, body }) {
+  const sender = extractEmailAddress(from);
+  const payload = {
+    personalizations: [{ to: [{ email: HANDOFF_EMAIL }] }],
+    from: { email: 'thomas@theironhub.com', name: 'Thomas — IronHub Support' },
+    subject: `Unrouted message: ${subject || '(no subject)'}`,
+    content: [
+      {
+        type: 'text/plain',
+        value: `This email reached Thomas but is not a reply to any inquiry, so Thomas has not answered it and will not. It needs a person.
+
+From: ${from || 'unknown'}
+To: ${to || 'unknown'}
+Subject: ${subject || '(no subject)'}
+
+Message:
+${body}`,
+      },
+      {
+        type: 'text/html',
+        value: `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
+    <p style="margin:0 0 20px;padding:12px 16px;background:#FBF1DC;border-left:4px solid #9A6700;">
+      <strong>Needs a person</strong><br>
+      This email reached Thomas but is not a reply to any inquiry, so Thomas has not answered it and will not.
+    </p>
+    <p><strong>From:</strong> ${escapeHtml(from || 'unknown')}<br>
+    <strong>To:</strong> ${escapeHtml(to || 'unknown')}<br>
+    <strong>Subject:</strong> ${escapeHtml(subject || '(no subject)')}</p>
+    <p><strong>Message:</strong></p>
+    ${bodyToHtml(body)}
+  </div>`,
+      },
+    ],
+  };
+
+  // Reply-To only when we could parse a real address, so the team can answer
+  // the sender directly rather than replying to Thomas.
+  if (sender) payload.reply_to = { email: sender };
+
+  await sendViaSendGrid(payload);
+}
+
 app.get('/assist', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'assist.html'));
 });
@@ -851,7 +915,28 @@ app.post('/inbound', upload.none(), async (req, res) => {
 
   const match = to.match(/thomas\+inquiry-(\d+)@/);
   if (!match) {
-    console.log('[INBOUND] Could not parse inquiry ID from:', to);
+    const from = req.body.from || '';
+    const body = stripQuotedEmail(text);
+
+    // Don't forward our own mail back to ourselves — an auto-responder on the
+    // IronHub side would otherwise bounce between the two addresses forever.
+    const sender = extractEmailAddress(from);
+    if (sender && /@([\w.-]+\.)?theironhub\.com$/i.test(sender)) {
+      console.log(`[INBOUND] Unrouted message from our own domain (${sender}) — not forwarding`);
+      return;
+    }
+
+    if (!body) {
+      console.log(`[INBOUND] Unrouted message from ${from || 'unknown'} has no body — dropping`);
+      return;
+    }
+
+    try {
+      await forwardUnroutableMessage({ from, to, subject: req.body.subject, body });
+      console.log(`[INBOUND] Unrouted message from ${from || 'unknown'} forwarded to ${HANDOFF_EMAIL}`);
+    } catch (err) {
+      console.error(`[INBOUND] Failed to forward unrouted message from ${from || 'unknown'}:`, err.message);
+    }
     return;
   }
 

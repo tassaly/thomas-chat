@@ -45,6 +45,7 @@ Rails: sales_rep_id -> Thomas
 
 Buyer replies
   └─ SendGrid Inbound Parse -> POST /inbound (multipart)
+       ├─ no inquiry id?       -> forwardUnroutableMessage() to sales, done
        ├─ stripQuotedEmail()      drop the quoted reply chain
        ├─ already handed off?  -> forwardPostHandoffMessage() to sales, done
        └─ otherwise            -> record message, scheduleThomasReply()
@@ -74,6 +75,12 @@ and no database.
 Read it before changing how Thomas talks. Most rules exist to fix a specific
 observed failure, so when one looks redundant, check `git log` for it first — the
 commit that introduced it usually explains what it fixed.
+
+`SOMEONE OFFERING TO SELL YOU EQUIPMENT` is the one section that isn't about
+selling to a buyer. Thomas is told never to state or imply how IronHub takes on
+equipment — outright purchase, consignment, fees — because he has not been told,
+and a guess there is an unauthorised commercial statement to a stranger. He
+acknowledges, hands off, and stops.
 
 The price section is the most heavily iterated and the easiest to regress. An early
 version gated the price answer behind timeline and location questions, which read as
@@ -122,7 +129,7 @@ The role-play tool is exempt.
 | Route | Auth | Purpose |
 | --- | --- | --- |
 | `POST /assign` | `X-Webhook-Secret` | Called by Rails on assignment. Creates the session, queues the opening email, returns immediately. |
-| `POST /inbound` | none | SendGrid Inbound Parse target, multipart. Inquiry id parsed from the recipient address. |
+| `POST /inbound` | none | SendGrid Inbound Parse target, multipart. Inquiry id parsed from the recipient address; mail that carries no inquiry id is forwarded to `sales@theironhub.com` rather than dropped. |
 | `POST /chat` | none | Role-play tool. Instant, bypasses the delay. |
 | `POST /assist` | none | Draft assist — one ready-to-send reply, no session state. |
 | `POST /reset` | none | Drops a session and cancels any pending reply. |
