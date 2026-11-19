@@ -477,21 +477,104 @@ Assess interest level based on engagement, urgency, and how readily the buyer ha
 Once you're done with any research, respond with ONLY valid JSON as your final message, no markdown code fences and no explanation text, matching exactly this shape:
 {"conversationOver": boolean, "interestLevel": "low" | "medium" | "high", "interestReasoning": "one sentence", "summary": "3-5 sentence summary of what was discussed and where things stand", "companyBackground": "string or null"}`;
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
-    system: analysisPrompt,
-    messages: [{ role: 'user', content: 'Analyze the conversation now.' }],
-    tools: isFreeDomain ? undefined : [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }],
-  });
+  // The web_search tool makes the model narrate between searches ("The search
+  // returned...", "No reliable..."), so the response holds several text blocks
+  // and the JSON is only in the last one, sometimes inside code fences or with
+  // chatter around it. Joining every block and JSON.parse-ing the lot threw on
+  // every company-domain buyer, so no handoff ever fired. Parse defensively.
+  const run = async (withSearch) => {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: analysisPrompt,
+      messages: [{ role: 'user', content: 'Analyze the conversation now.' }],
+      tools: withSearch ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }] : undefined,
+    });
+    return parseAnalysisResponse(response);
+  };
 
-  const text = response.content
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
-    .trim();
+  let analysis = null;
+  try {
+    analysis = await run(!isFreeDomain);
+  } catch (err) {
+    console.error('[HANDOFF] Analysis attempt 1 failed:', err.message);
+  }
+  if (!analysis && !isFreeDomain) {
+    // Retry once without web search: no narration, and the company
+    // background is a nice-to-have, not worth losing the handoff over.
+    try {
+      analysis = await run(false);
+    } catch (err) {
+      console.error('[HANDOFF] Analysis attempt 2 failed:', err.message);
+    }
+  }
+  if (!analysis) {
+    // Safe fallback: don't judge the conversation closed (the reply budget
+    // backstop in maybeSendHandoff still forces the close), and make sure the
+    // team still gets the full transcript.
+    console.error(`[HANDOFF] Inquiry ${inquiry.inquiry_id} — analysis unavailable, using fallback summary`);
+    analysis = {
+      conversationOver: false,
+      interestLevel: 'unknown',
+      interestReasoning: 'Automated analysis was unavailable for this conversation.',
+      summary: 'Automated summary could not be generated. Please read the full conversation below.',
+      companyBackground: null,
+      fallback: true,
+    };
+  }
+  return analysis;
+}
 
-  return JSON.parse(text);
+// Pull the analysis JSON out of a model response: prefer the last text block,
+// strip code fences, tolerate text around the object, and require the one key
+// the caller depends on.
+function parseAnalysisResponse(response) {
+  const blocks = response.content.filter(b => b.type === 'text').map(b => b.text || '');
+  const candidates = [];
+  if (blocks.length) candidates.push(blocks[blocks.length - 1]);
+  candidates.push(blocks.join('\n'));
+  for (const c of candidates) {
+    const obj = extractAnalysisJson(c);
+    if (obj) return obj;
+  }
+  throw new Error(`no analysis JSON in response (${blocks.length} text blocks, starts "${(blocks[blocks.length - 1] || '').slice(0, 40)}")`);
+}
+
+function extractAnalysisJson(text) {
+  if (!text) return null;
+  const cleaned = text.replace(/```(?:json)?/gi, '');
+  // Scan for balanced {...} objects, string-aware, and take the last one that
+  // parses and carries conversationOver.
+  let found = null;
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < cleaned.length; j++) {
+      const ch = cleaned[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            const obj = JSON.parse(cleaned.slice(i, j + 1));
+            if (obj && typeof obj === 'object' && 'conversationOver' in obj) {
+              obj.conversationOver = obj.conversationOver === true || obj.conversationOver === 'true';
+              found = obj;
+            }
+          } catch (e) { /* not this one */ }
+          break;
+        }
+      }
+    }
+  }
+  return found;
 }
 
 function conversationTranscript(session) {
@@ -591,6 +674,7 @@ async function maybeSendHandoff(sessionId, inquiry) {
   }
 
   if (!analysis) return;
+  console.log(`[HANDOFF] Inquiry ${inquiry.inquiry_id} — analysis ok (conversationOver=${analysis.conversationOver}, interest=${analysis.interestLevel}${analysis.fallback ? ', fallback' : ''}, replies=${thomasReplyCount(session)})`);
 
   // Backstop: however the analyzer judges it, don't let Thomas keep going
   // past the reply budget. Prompts drift; this doesn't.
